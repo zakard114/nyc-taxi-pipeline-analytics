@@ -1,0 +1,63 @@
+# Kestra with PostgreSQL - persists accounts and flows across docker-compose down/up
+volumes:
+  postgres-data:  # Virtual disk for database (accounts, flow data)
+    driver: local
+  kestra-data:  # Virtual disk for runtime files (logs, storage)
+    driver: local
+
+services:
+  # 1. PostgreSQL service: stores all critical data
+  postgres:
+    image: postgres:18
+    volumes:
+      - postgres-data:/var/lib/postgresql  # Persist DB data to host
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: k3str4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. Kestra service: main pipeline execution engine
+  kestra:
+    image: kestra/kestra:latest
+    # Default image user cannot always create dirs under /app/storage; official compose uses root for local dev
+    user: root
+    command: server standalone  # Standalone mode (uses external DB instead of embedded)
+    ports:
+      - "8080:8080"  # Web UI (http://localhost:8080)
+      - "8081:8081"  # Internal communication
+    volumes:
+      - kestra-data:/app/storage
+      - ./scripts:/app/scripts
+      - ./terraform/gcp-creds.json:/app/gcp-creds.json:ro
+      # Required for tasks that spawn Docker (e.g. io.kestra.plugin.gcp.cli.GCloudCLI → google/cloud-sdk).
+      # Without this, you may see: java.net.SocketException: No such file or directory (no docker.sock).
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: k3str4
+        kestra:
+          server:
+            basic-auth:
+              username: admin@company.com
+              password: StrongPass1
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              base-path: "/app/storage"
+          queue:
+            type: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy

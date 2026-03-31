@@ -1,0 +1,14 @@
+version: 2
+
+seeds:
+  - name: taxi_zone_lookup
+    description: "NYC TLC taxi zone lookup (LocationID, borough, zone, service_zone). Loaded via dbt seed."
+    columns:
+      - name: locationid
+        description: "TLC location id."
+      - name: borough
+        description: "Borough."
+      - name: zone
+        description: "Zone name."
+      - name: service_zone
+        description: "Service zone (e.g. Yellow Zone, Boro Zone, EWR)."

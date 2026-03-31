@@ -1,0 +1,106 @@
+# dbt sources: real BigQuery tables that models read through {{ source('staging', 'yellow_tripdata') }}.
+# Physical tables: set to match BigQuery after ingest (see Project/scripts/ingest_tlc_2019_2020.py).
+version: 2
+
+sources:
+  - name: staging
+    description: "Raw trip data loaded from GCS (Kestra pipeline → BigQuery)."
+    database: zakard-de-project # GCP project id
+    schema: trips_data_all # BigQuery dataset
+    tables:
+      - name: yellow_tripdata
+        description: "NYC Yellow Taxi trip records (partitioned/clustered in BigQuery)."
+        identifier: yellow_tripdata_2019_2020 # Full 2019–2020 from TLC Parquet via ingest script; or e.g. yellow_tripdata_2021_01 for one month only
+      - name: green_tripdata
+        description: "NYC Green Taxi trip records (lpep_* pickup/dropoff columns in raw data)."
+        identifier: green_tripdata_2019_2020 # Match ingest script output; adjust if you use a different table name
+
+# Model documentation for SQL in this folder. (Sample models like my_first/my_second are omitted
+# unless matching .sql files exist; only stg_yellow_tripdata is defined here.)
+models:
+  - name: stg_yellow_tripdata
+    description: "Staging view on Yellow Taxi source data: type casts, surrogate key, deduplication."
+    columns:
+      - name: tripid
+        description: "Surrogate key derived from VendorID and pickup time (tpep_pickup_datetime)."
+        # Quality checks (run with dbt test)
+        data_tests:
+          - unique # tripid must be unique
+          - not_null # tripid must not be null
+
+  - name: stg_green_tripdata
+    description: "Staging view on Green Taxi source data: same grain as Yellow, lpep_* datetimes."
+    columns:
+      - name: tripid
+        description: "Surrogate key from VendorID and lpep_pickup_datetime."
+        data_tests:
+          - unique
+          - not_null
+
+  - name: dim_zones
+    description: "TLC zone dimension: LocationID to borough, zone, and service zone (from seed taxi_zone_lookup)."
+    columns:
+      - name: locationid
+        description: "TLC location identifier (join key to pickup/dropoff LocationID in trip facts)."
+      - name: borough
+        description: "Borough name (e.g. Manhattan, Queens)."
+      - name: zone
+        description: "Zone label (e.g. JFK Airport, Alphabet City)."
+      - name: service_zone
+        description: "Service area label; seed values may be normalized via replace in dim_zones.sql."
+
+  - name: fact_trips
+    description: "Trip-level fact table: Yellow and Green staging unioned, joined to dim_zones for pickup/dropoff borough and zone names."
+    columns:
+      - name: tripid
+        description: "Surrogate trip id from staging."
+      - name: vendorid
+        description: "TLC vendor id."
+      - name: service_type
+        description: "Yellow or Green (Green when union includes Green staging)."
+      - name: pickup_borough
+        description: "Pickup location borough from zone dimension."
+      - name: pickup_zone
+        description: "Pickup zone label from zone dimension."
+      - name: dropoff_borough
+        description: "Dropoff location borough from zone dimension."
+      - name: dropoff_zone
+        description: "Dropoff zone label from zone dimension."
+
+  - name: dm_monthly_zone_revenue
+    description: "Mart: monthly aggregates by pickup zone and service type for dashboards (revenue components, trip counts, averages)."
+    columns:
+      - name: revenue_zone
+        description: "Pickup zone name (revenue attributed to pickup location)."
+      - name: revenue_month
+        description: "Calendar month of pickup (truncated from pickup_datetime)."
+      - name: service_type
+        description: "Yellow or Green."
+      - name: revenue_monthly_total_amount
+        description: "Sum of total_amount for the grain."
+      - name: total_monthly_trips
+        description: "Trip count for the grain."
+
+  - name: dm_service_type_totals
+    description: "One row per service_type with trip_total — for Looker pie without SUM aggregation errors."
+    columns:
+      - name: service_type
+        description: "Yellow or Green."
+      - name: trip_total
+        description: "Sum of trips across all months in dm_citywide_monthly."
+
+  - name: dm_citywide_monthly
+    description: "Citywide monthly totals by service type (zones rolled up). Prefer this table in Looker for pie/bars to avoid SUM on pre-aggregated zone mart."
+    columns:
+      - name: revenue_month
+        description: "Calendar month (start of month)."
+      - name: trip_year
+        description: "Year for stacked year comparisons (2019 vs 2020)."
+      - name: trip_month
+        description: "Month number 1–12 for X-axis sort."
+      - name: service_type
+        description: "Yellow or Green."
+      - name: trips
+        description: "Total trips in NYC that month for this service type."
+      - name: revenue_total
+        description: "Sum of total_amount for the grain."

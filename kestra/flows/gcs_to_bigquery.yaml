@@ -1,0 +1,59 @@
+  # Prerequisites: GCP_BUCKET and GCP_CREDS in Kestra KV (namespace: system).
+  # Pattern: Load Parquet from GCS into a staging table (autodetect only), then CTAS into the final
+  # partitioned + clustered table. Avoids empty BigQuery errors some setups return when combining
+  # LoadJob + autodetect + timePartitioning + clustering in one step.
+
+  id: gcs_to_bigquery
+  namespace: system
+
+  description: |
+    Loads NYC Yellow Taxi Parquet from GCS, then builds a DAY-partitioned (tpep_pickup_datetime)
+    and clustered (VendorID, PULocationID) table via CREATE OR REPLACE ... AS SELECT.
+
+  variables:
+    project_id: "zakard-de-project"
+    file_name: "yellow_tripdata_2021-01.parquet"
+    dataset: "trips_data_all"
+    table: "yellow_tripdata_2021_01"
+    staging_table: "yellow_tripdata_2021_01_staging"
+
+  tasks:
+    - id: resolve_gcs_uri
+      type: io.kestra.plugin.core.debug.Return
+      format: "gs://{{ kv('GCP_BUCKET') | trim }}/raw/nyc_taxi/{{ vars.file_name }}"
+
+    # Step A — raw load (no partition/cluster); BigQuery infers schema from Parquet.
+    - id: load_staging
+      type: io.kestra.plugin.gcp.bigquery.LoadFromGcs
+      from:
+        - "{{ outputs.resolve_gcs_uri.value }}"
+      destinationTable: "{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}"
+      format: PARQUET
+      createDisposition: CREATE_IF_NEEDED
+      writeDisposition: WRITE_TRUNCATE
+      autodetect: true
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+    # Step B — final table with partition + cluster (standard SQL; clearer errors if types mismatch).
+    - id: build_partitioned_table
+      type: io.kestra.plugin.gcp.bigquery.Query
+      sql: |
+        CREATE OR REPLACE TABLE `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.table }}`
+        PARTITION BY DATE(tpep_pickup_datetime)
+        CLUSTER BY VendorID, PULocationID
+        AS
+        SELECT * FROM `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}`
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+    # Step C — remove staging table.
+    - id: drop_staging
+      type: io.kestra.plugin.gcp.bigquery.Query
+      sql: |
+        DROP TABLE IF EXISTS `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}`
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+  pluginDefaults:
+    - type: io.kestra.plugin.gcp
+      values:
+        serviceAccount: "{{ kv('GCP_CREDS') }}"
+        projectId: "zakard-de-project"

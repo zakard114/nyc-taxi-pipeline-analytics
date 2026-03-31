@@ -1,0 +1,19 @@
+# Requires KV key GCP_CREDS (full service account JSON) in namespace system
+# Set projectId to match your GCP project and the key's project_id field
+id: gcp_setup_bigquery
+namespace: system
+
+tasks:
+  - id: create_bigquery_dataset
+    type: io.kestra.plugin.gcp.bigquery.CreateDataset
+    name: "trips_data_all"
+    location: "US"
+    ifExists: "SKIP"
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+    projectId: "zakard-de-project"
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+      projectId: "zakard-de-project"

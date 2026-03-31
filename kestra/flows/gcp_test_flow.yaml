@@ -1,0 +1,28 @@
+# Paste into Kestra UI or sync via Git — fixes Write + GCS path issues on Docker
+id: gcp_test_flow
+namespace: system
+
+tasks:
+  # Create a real file in the task working dir (reliable with outputFiles)
+  - id: create-txt-file
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - |
+        echo "Hello GCP! Connection verified by zakard." > hello.txt
+    outputFiles:
+      - hello.txt
+
+  - id: upload-to-gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    from: "{{ outputs['create-txt-file'].outputFiles['hello.txt'] }}"
+    # Leading/trailing whitespace in KV values can cause GCS 400 (Invalid bucket name); trim is recommended
+    to: "gs://{{ kv('GCP_BUCKET') | trim }}/hello.txt"
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+      projectId: "zakard-de-project"

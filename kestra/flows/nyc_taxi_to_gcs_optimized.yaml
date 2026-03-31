@@ -1,0 +1,37 @@
+# Standard pattern: http.Download → internal URI → gcs.Upload (no extra Docker image for GCloudCLI).
+id: nyc_taxi_to_gcs_optimized
+namespace: system
+
+description: |
+  Optimized pipeline using io.kestra.plugin.core.http.Download and io.kestra.plugin.gcp.gcs.Upload.
+  Data path: HTTP → Kestra internal storage → GCS (still limited by worker network for the upload step).
+
+variables:
+  file_name: "yellow_tripdata_2021-01.parquet"
+  url: "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2021-01.parquet"
+
+tasks:
+  - id: download_to_internal
+    type: io.kestra.plugin.core.http.Download
+    uri: "{{ vars.url }}"
+    timeout: PT10M
+
+  - id: upload_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    # Bracket form avoids Pebble parsing edge cases on some task ids
+    from: "{{ outputs['download_to_internal'].uri }}"
+    # trim: leading/trailing whitespace in GCP_BUCKET KV breaks GCS bucket validation
+    to: "gs://{{ kv('GCP_BUCKET') | trim }}/raw/nyc_taxi/{{ vars.file_name }}"
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+    timeout: PT20M
+    retry:
+      type: exponential
+      maxAttempts: 3
+      interval: PT2M
+      maxInterval: PT15M
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+      projectId: "zakard-de-project"

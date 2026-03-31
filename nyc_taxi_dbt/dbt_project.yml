@@ -1,0 +1,21 @@
+# dbt project: NYC Yellow Taxi (staging models on top of BigQuery sources).
+name: "nyc_taxi_dbt"
+version: "1.0.0"
+config-version: 2
+
+# Must match your ~/.dbt/profiles.yml profile name.
+profile: "nyc_taxi_dbt"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+
+models:
+  nyc_taxi_dbt:
+    +materialized: view
+    # Core dimensions and facts: prefer tables for stable joins and performance.
+    core:
+      +materialized: table
+    # Mart / reporting: pre-aggregated tables for dashboards.
+    mart:
+      +materialized: table

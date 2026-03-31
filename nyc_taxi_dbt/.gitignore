@@ -1,0 +1,5 @@
+# dbt artifacts (regenerate locally)
+target/
+logs/
+dbt_packages/
+package-lock.yml

@@ -1,0 +1,55 @@
+# Prerequisites: GCP_BUCKET and GCP_CREDS in Kestra KV (namespace: system).
+# Upload TLC Green Taxi Parquet to: gs://<bucket>/raw/nyc_taxi/green_tripdata_2021-01.parquet
+# Green uses lpep_pickup_datetime / lpep_dropoff_datetime (not tpep_*).
+
+id: gcs_to_bigquery_green
+namespace: system
+
+description: |
+  Loads NYC Green Taxi Parquet from GCS, then builds a DAY-partitioned table on lpep_pickup_datetime
+  and clustered (VendorID, PULocationID). Matches dbt source identifier green_tripdata_2021_01.
+
+variables:
+  project_id: "zakard-de-project"
+  file_name: "green_tripdata_2021-01.parquet"
+  dataset: "trips_data_all"
+  table: "green_tripdata_2021_01"
+  staging_table: "green_tripdata_2021_01_staging"
+
+tasks:
+  - id: resolve_gcs_uri
+    type: io.kestra.plugin.core.debug.Return
+    format: "gs://{{ kv('GCP_BUCKET') | trim }}/raw/nyc_taxi/{{ vars.file_name }}"
+
+  - id: load_staging
+    type: io.kestra.plugin.gcp.bigquery.LoadFromGcs
+    from:
+      - "{{ outputs.resolve_gcs_uri.value }}"
+    destinationTable: "{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}"
+    format: PARQUET
+    createDisposition: CREATE_IF_NEEDED
+    writeDisposition: WRITE_TRUNCATE
+    autodetect: true
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+  - id: build_partitioned_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE OR REPLACE TABLE `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.table }}`
+      PARTITION BY DATE(lpep_pickup_datetime)
+      CLUSTER BY VendorID, PULocationID
+      AS
+      SELECT * FROM `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}`
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+  - id: drop_staging
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      DROP TABLE IF EXISTS `{{ vars.project_id }}.{{ vars.dataset }}.{{ vars.staging_table }}`
+    serviceAccount: "{{ kv('GCP_CREDS') }}"
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{ kv('GCP_CREDS') }}"
+      projectId: "zakard-de-project"

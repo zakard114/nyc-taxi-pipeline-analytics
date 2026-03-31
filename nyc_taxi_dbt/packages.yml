@@ -1,0 +1,3 @@
+# No Hub packages required — staging uses native BigQuery for tripid (avoids Windows file-lock issues during dbt deps).
+# To use dbt_utils later: add dbt-labs/dbt_utils here, close apps locking dbt_packages, then run dbt deps.
+packages: []
