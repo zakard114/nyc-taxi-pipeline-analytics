@@ -315,6 +315,10 @@ Run the orchestrator **locally** from the **repository root** (the same folder a
 
 **Important:** The **merge / upload** logic in `scripts/ingest_tlc_2019_2020.py` can consider **all** Parquet under `data/raw/nyc_taxi/` depending on stage. For a **true one-month** test, start with an empty or clean `data/raw` tree for that run, or only the months you intend—see script and flow comments.
 
+**Runtime (what “slow” looks like):** `tlc_upload` and `tlc_bigquery` often run for **many minutes** each (Parquet merge, GCS upload, BigQuery `LOAD`). A nested `python:3.12-slim` container visible in `docker ps` for **tens of minutes** is **usually normal** while Kestra shows the task as `RUNNING`—not necessarily stuck.
+
+**After SUCCESS:** In the UI, confirm **`tlc_download` → `tlc_upload` → `tlc_bigquery`** are all green. In **BigQuery**, check your TLC dataset (default **`trips_data_all`**) for the expected Yellow/Green tables. Then run **dbt** against those sources (`cd nyc_taxi_dbt` → `dbt seed` / `dbt run` as needed).
+
 ### Terraform
 
 Same commands as in [End-to-end workflow (execution order)](#end-to-end-workflow-execution-order) (`cd terraform` → `init` / `plan` / `apply`). Defaults in `terraform/variables.tf` are **placeholders** (`your-gcp-project-id`, `your-gcs-bucket-name`); override with **`terraform.tfvars`** (gitignored) or `-var` flags before a real `apply`. Renaming the bucket may **create** a new bucket; clean up old resources if needed.
