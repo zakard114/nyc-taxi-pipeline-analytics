@@ -98,6 +98,8 @@ flowchart LR
 
 **Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra DAGs** under `kestra/flows/` (e.g. `nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For rubric “orchestrated batch to the data lake,” treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
 
+**Kestra flow `nyc_taxi_ingest_pipeline`:** End-to-end TLC batch as a **three-step DAG** (`tlc_download` → `tlc_upload` → `tlc_bigquery`) that invokes `scripts/ingest_tlc_2019_2020.py` with `--download-only`, `--upload-only`, and `--bq-only` in order. Each step runs in a `python:3.12-slim` container via `docker run` (see `kestra/flows/nyc_taxi_ingest_pipeline.yaml`). **Requirements:** Docker socket mounted for the Kestra service (see `docker-compose.yml`), repo mounted at **`/workspace`**, `requirements-ingest.txt` at the repo root, and KV keys **`GCP_BUCKET`**, **`GCP_CREDS`**. Edit `variables.project_id` / `variables.bq_dataset` in the flow YAML if your GCP project or dataset names differ. This is the clearest “orchestrator runs the full batch” artifact for reviewers.
+
 **Terraform** (from a machine with credentials — **do not commit** JSON keys):
 
 ```bash

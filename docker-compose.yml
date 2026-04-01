@@ -32,7 +32,8 @@ services:
       - "8081:8081"  # Internal communication
     volumes:
       - kestra-data:/app/storage
-      - ./scripts:/app/scripts
+      # Full repo at /workspace so Kestra flow nyc_taxi_ingest_pipeline can docker-run the ingest script (data/, scripts/, terraform/).
+      - ./:/workspace
       - ./terraform/gcp-creds.json:/app/gcp-creds.json:ro
       # Required for tasks that spawn Docker (e.g. io.kestra.plugin.gcp.cli.GCloudCLI → google/cloud-sdk).
       # Without this, you may see: java.net.SocketException: No such file or directory (no docker.sock).

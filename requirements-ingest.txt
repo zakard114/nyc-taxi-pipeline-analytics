@@ -1,0 +1,4 @@
+# Python deps for scripts/ingest_tlc_2019_2020.py (used by Kestra nyc_taxi_ingest_pipeline + local runs).
+google-cloud-bigquery>=3.14.0
+google-cloud-storage>=2.14.0
+pyarrow>=14.0.0
