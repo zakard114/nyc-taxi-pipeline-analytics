@@ -1,5 +1,30 @@
 # Data Engineering Portfolio (GitHub Archive + NYC TLC Taxi)
 
+## Story at a glance (NYC TLC track)
+
+Think of this pipeline as a **taxi dispatch office** turning public trip records into decisions people can see:
+
+| Step | What happens | Tools (in this repo) |
+|------|----------------|----------------------|
+| 🚚 **Ingestion** | NYC TLC publishes monthly Parquet; we **bring it in** and normalize it for the cloud. | Python, PyArrow (`scripts/ingest_tlc_2019_2020.py`); optional **Kestra** (`kestra/flows/`) |
+| 🏠 **Lake & warehouse** | Files land in **GCS** (lake), then load into **BigQuery** with **partitioning** and **clustering** so time- and vendor-heavy queries stay fast. | GCS → BigQuery loads |
+| 🍳 **Transformation** | Raw trips become **staging → core → mart** models—monthly and service-type metrics instead of row-by-row receipts. | **dbt** (`nyc_taxi_dbt/`) |
+| 📊 **Visualization** | Marts feed a **Looker Studio** report so trends (e.g. **2019 vs 2020**, COVID-era dips) are obvious without writing SQL first. | Looker Studio on mart tables |
+
+This repository also includes a **GitHub Archive** ingestion track on the same GCP stack (orchestration + lake → BigQuery); see [Project objective](#project-objective) and [Architecture (high level)](#architecture-high-level).
+
+**Pipeline (conceptual)** — NYC TLC batch path (Parquet → GCS → BigQuery → dbt → Looker):
+
+![NYC TLC pipeline (conceptual)](docs/nyc-tlc-pipeline-architecture.png)
+
+**Dashboard (static export)** — pre-aggregated marts as a single screen:
+
+![NYC Taxi Data Pipeline Analytics (2019–2020) — Looker Studio](docs/nyc-taxi-looker-analytics/NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png)
+
+*If the image does not render locally, add the PNG next to [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) or open that folder after export.*
+
+---
+
 ## Project objective
 
 This repository demonstrates **end-to-end data pipelines on Google Cloud** across **two complementary domains** on the **same GCP stack**:
@@ -11,17 +36,17 @@ This repository demonstrates **end-to-end data pipelines on Google Cloud** acros
 
 **Why GitHub Archive (this track):** [GitHub Archive](https://www.gharchive.org/) provides **hourly public JSON event streams** (repository activity over time), which fits **time-oriented ingestion**, **lake → BigQuery** loads, and orchestration practice. This repository uses a **small, reproducible sample** (`github_events_100`)—not a full historical crawl—so cloud runs stay cheap and reviewable.
 
-Together, these tracks show **lake → warehouse → transformation → dashboard**, which matches the **Data Engineering ZoomCamp**-style project scope (pipeline + warehouse SQL + dashboard).
+Together, these tracks show **lake → warehouse → transformation → dashboard**—a standard analytics-engineering scope (pipeline + warehouse SQL + dashboard).
 
 **NYC TLC — Looker Studio exports (PDF / PNG):** Static copies of the dashboard are in **`docs/nyc-taxi-looker-analytics/`** — see [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) for `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).pdf` and `.png`.
 
 > **Why two domains?** One track is **ingest/orchestration** (GitHub Archive → lake → BigQuery); the other is **modeling + BI** (NYC taxi → dbt → Looker). Showing **two subject areas** on purpose avoids a portfolio that reads as **only one business domain** (for example, taxi analytics alone)—reviewers can still see **breadth** (orchestration, lake patterns) and **depth** (dimensional models, marts) together.
 
-**Repository root for commands:** use **this folder** as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this tree still lives under a course monorepo, it may appear as **`DE/Project`**. See [Standalone repository & GitHub](#standalone-repository--github).
+**Repository root for commands:** use **this folder** as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this project is nested inside a larger parent repo, use the path to **this** directory as the root. See [Standalone repository & GitHub](#standalone-repository--github).
 
 ### Prerequisites
 
-- **Python** 3.10+ (3.12–3.13 used elsewhere in the course)
+- **Python** 3.10+ (3.12–3.13 are commonly used and work well with these scripts)
 - **GCP**: project with **BigQuery** + **GCS** enabled; **service account** JSON with appropriate roles (see Terraform / GCP docs)
 - **Docker Desktop** (or another Docker engine with Compose) — **only if** you run **Kestra** locally via `docker-compose.yml` (flows that call `docker run` need the socket + custom image; see [Kestra: Docker Compose](#kestra-docker-compose-local-ui)).
 - **Tools** (install as needed): `gcloud` CLI (optional), **dbt** with BigQuery adapter, **Terraform**, **Kestra** (orchestration flows in `kestra/flows/`), `pip install` deps in `scripts`/dbt project
@@ -83,7 +108,7 @@ flowchart LR
 | Status | Scope |
 |--------|--------|
 | **Done** | GitHub-oriented **ingestion** assets (DuckDB / GCS / Kestra / BigQuery) as documented; **NYC** batch ingest script, **dbt** (`nyc_taxi_dbt`) through **staging → core → mart**, including **`dm_monthly_zone_revenue`**, **`dm_citywide_monthly`**, **`dm_service_type_totals`**; **Looker Studio** (≥2 tiles: categorical + temporal). |
-| **Optional** | Extend TLC date range, streaming, or extra charts — not required for the documented course scope. |
+| **Optional** | Extend TLC date range, streaming, or extra charts — beyond the baseline documented here. |
 
 ---
 
@@ -97,7 +122,7 @@ flowchart LR
 | 3. Transformation | dbt | `cd nyc_taxi_dbt` → `dbt seed` → `dbt run` |
 | 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` |
 
-**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra flows** under `kestra/flows/`: an **end-to-end** flow **`nyc_taxi_ingest_pipeline.yaml`** (three stages in a `Sequential` task), plus **split** flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For rubric “orchestrated batch to the data lake,” treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
+**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra flows** under `kestra/flows/`: an **end-to-end** flow **`nyc_taxi_ingest_pipeline.yaml`** (three stages in a `Sequential` task), plus **split** flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For expectations around **orchestrated batch loads to the data lake**, treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
 
 **Terraform** (from a machine with credentials — **do not commit** JSON keys):
 
@@ -122,7 +147,7 @@ dbt run
 
 ## Looker Studio dashboard (NYC TLC)
 
-The course project asks for **at least two tiles**: one chart for **categorical distribution**, one for **distribution over time**, with clear titles.
+**Suggested dashboard baseline:** **at least two tiles**—one chart for **categorical distribution**, one for **distribution over time**, with clear titles.
 
 ### Report content (example)
 
@@ -148,7 +173,7 @@ Static exports of the Looker report are stored under **`docs/nyc-taxi-looker-ana
 
 The batch script loads **NYC TLC Yellow and Green** Parquet for **2019-01 through 2020-12** (`scripts/ingest_tlc_2019_2020.py`).
 
-- **Primary:** Course alignment; **reproducible** monthly files; **two full calendar years** for YoY and seasonality, including **COVID-19** effects in **2020**.
+- **Primary:** **Reproducible** public monthly files; **two full calendar years** for YoY and seasonality, including **COVID-19** effects in **2020**.
 - **Secondary:** Lower **download size**, **merge memory**, and **load** time than ingesting all historical months—sensible for a portfolio without changing the narrative.
 
 ---
@@ -167,7 +192,7 @@ The dbt project is **`nyc_taxi_dbt/`** (NYC Yellow & Green taxi analytics). It f
 
 ### BigQuery optimization (partitioning, clustering, marts)
 
-This addresses the course rubric: warehouse tables tuned for typical queries, with a short **how/why** below.
+The following summarizes how warehouse tables are tuned for typical queries, with a short **how/why** below.
 
 | Layer | What we do | Why |
 |-------|----------------|-----|
@@ -329,7 +354,7 @@ Then restore **local-only** files that are intentionally not in Git. Full checkl
 
 ---
 
-## Evaluation criteria self-check (rubric)
+## Capability checklist (self-review)
 
 | Criterion | How this repo addresses it |
 |-------------|------------------------------|

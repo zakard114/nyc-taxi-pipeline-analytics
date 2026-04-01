@@ -375,7 +375,7 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         ``VendorID``, ``PULocationID`` (NYC TLC Parquet column names) for filter/join-friendly scans.
         """
         table_id = f"{dataset_ref}.{table}"
-        # Aligns with Kestra flows (gcs_to_bigquery*.yaml) and course rubric (partition + cluster).
+        # Aligns with Kestra flows (gcs_to_bigquery*.yaml) and documented warehouse design (partition + cluster).
         clustering_fields = ["VendorID", "PULocationID"]
         base_cfgs: list[bigquery.LoadJobConfig] = []
         if bq_schema:
