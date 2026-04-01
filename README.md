@@ -96,6 +96,8 @@ flowchart LR
 | 3. Transformation | dbt | `cd nyc_taxi_dbt` → `dbt seed` → `dbt run` |
 | 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` |
 
+**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra DAGs** under `kestra/flows/` (e.g. `nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For rubric “orchestrated batch to the data lake,” treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
+
 **Terraform** (from a machine with credentials — **do not commit** JSON keys):
 
 ```bash
