@@ -21,6 +21,20 @@ variables:
   project_id: "zakard-de-project"
   bq_dataset: "trips_data_all"
 
+# Optional: narrow YYYY-MM range for cheaper tests (e.g. 2020-12 only). The merge step uses
+# every *.parquet under data/raw/nyc_taxi/{yellow,green}/ — for a true one-month run, use an
+# empty data/raw tree first or only the months you intend (see README).
+
+inputs:
+  - id: start
+    type: STRING
+    defaults: "2019-01"
+    description: "First month YYYY-MM (ingest script --start)."
+  - id: end
+    type: STRING
+    defaults: "2020-12"
+    description: "Last month YYYY-MM (ingest script --end)."
+
 tasks:
   - id: tlc_download
     type: io.kestra.plugin.scripts.shell.Commands
@@ -37,7 +51,7 @@ tasks:
           -e BQ_DATASET="{{ vars.bq_dataset }}" \
           -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
           -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --download-only"
+          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --download-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
   - id: tlc_upload
     type: io.kestra.plugin.scripts.shell.Commands
@@ -56,7 +70,7 @@ tasks:
           -e BQ_DATASET="{{ vars.bq_dataset }}" \
           -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
           -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --upload-only"
+          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --upload-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
   - id: tlc_bigquery
     type: io.kestra.plugin.scripts.shell.Commands
@@ -75,4 +89,4 @@ tasks:
           -e BQ_DATASET="{{ vars.bq_dataset }}" \
           -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
           -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --bq-only"
+          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --bq-only --start {{ inputs.start }} --end {{ inputs.end }}"

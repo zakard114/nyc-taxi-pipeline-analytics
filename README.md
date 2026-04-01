@@ -100,6 +100,8 @@ flowchart LR
 
 **Kestra flow `nyc_taxi_ingest_pipeline`:** End-to-end TLC batch as a **three-step DAG** (`tlc_download` → `tlc_upload` → `tlc_bigquery`) that invokes `scripts/ingest_tlc_2019_2020.py` with `--download-only`, `--upload-only`, and `--bq-only` in order. Each step runs in a `python:3.12-slim` container via `docker run` (see `kestra/flows/nyc_taxi_ingest_pipeline.yaml`). **Requirements:** Docker socket mounted for the Kestra service (see `docker-compose.yml`), repo mounted at **`/workspace`**, `requirements-ingest.txt` at the repo root, and KV keys **`GCP_BUCKET`**, **`GCP_CREDS`**. Edit `variables.project_id` / `variables.bq_dataset` in the flow YAML if your GCP project or dataset names differ. This is the clearest “orchestrator runs the full batch” artifact for reviewers.
 
+**Flow inputs `start` / `end` (YYYY-MM):** Default `2019-01` … `2020-12`. Set both to e.g. `2020-12` for a **cheap smoke test**—but the ingest script **merges every Parquet already present** under `data/raw/nyc_taxi/yellow` and `green`. For a true one-month test, start from **empty** `data/raw/nyc_taxi/` (or only the months you need) before running the DAG. BigQuery loads use **WRITE_TRUNCATE**-style replacement for the merged tables (see script), not append duplication.
+
 **Terraform** (from a machine with credentials — **do not commit** JSON keys):
 
 ```bash
