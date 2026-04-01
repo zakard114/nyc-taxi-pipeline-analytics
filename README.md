@@ -23,7 +23,8 @@ Together, these tracks show **lake → warehouse → transformation → dashboar
 
 - **Python** 3.10+ (3.12–3.13 used elsewhere in the course)
 - **GCP**: project with **BigQuery** + **GCS** enabled; **service account** JSON with appropriate roles (see Terraform / GCP docs)
-- **Tools** (install as needed): `gcloud` CLI (optional), **dbt** with BigQuery adapter, **Terraform**, **Kestra** (for orchestration flows), `pip install` deps in `scripts`/dbt project
+- **Docker Desktop** (or another Docker engine with Compose) — **only if** you run **Kestra** locally via `docker-compose.yml` (flows that call `docker run` need the socket + custom image; see [Kestra: Docker Compose](#kestra-docker-compose-local-ui)).
+- **Tools** (install as needed): `gcloud` CLI (optional), **dbt** with BigQuery adapter, **Terraform**, **Kestra** (orchestration flows in `kestra/flows/`), `pip install` deps in `scripts`/dbt project
 
 ---
 
@@ -92,15 +93,11 @@ flowchart LR
 |------|------|----------------|
 | 1. Infra | GCS bucket, BigQuery datasets, IAM | `terraform init` → `plan` → `apply` (see [Configuration](#configuration-gcp-and-kestra)) |
 | 2. Orchestration (GitHub path) | GCS → BigQuery | Kestra flows after KV is set |
-| 2b. NYC TLC pipeline (main batch path for taxi) | Parquet → merge → GCS → BigQuery | `python scripts/ingest_tlc_2019_2020.py` (see script docstring). **Alternative:** orchestrate similar steps with **Kestra** (`kestra/flows/`) instead of the all-in-one script—same lake → warehouse idea, different runner. |
+| 2b. NYC TLC pipeline (main batch path for taxi) | Parquet → merge → GCS → BigQuery | `python scripts/ingest_tlc_2019_2020.py` (see script docstring). **Alternative:** **`kestra/flows/nyc_taxi_ingest_pipeline.yaml`** (download → upload → BigQuery as one flow) or the split flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery*.yaml`)—see [Kestra: Docker Compose (local UI)](#kestra-docker-compose-local-ui). |
 | 3. Transformation | dbt | `cd nyc_taxi_dbt` → `dbt seed` → `dbt run` |
 | 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` |
 
-**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra DAGs** under `kestra/flows/` (e.g. `nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For rubric “orchestrated batch to the data lake,” treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
-
-**Kestra flow `nyc_taxi_ingest_pipeline`:** End-to-end TLC batch as a **three-step DAG** (`tlc_download` → `tlc_upload` → `tlc_bigquery`) that invokes `scripts/ingest_tlc_2019_2020.py` with `--download-only`, `--upload-only`, and `--bq-only` in order. Each step runs in a `python:3.12-slim` container via `docker run` (see `kestra/flows/nyc_taxi_ingest_pipeline.yaml`). **Requirements:** Docker socket mounted for the Kestra service (see `docker-compose.yml`), repo mounted at **`/workspace`**, `requirements-ingest.txt` at the repo root, and KV keys **`GCP_BUCKET`**, **`GCP_CREDS`**. Edit `variables.project_id` / `variables.bq_dataset` in the flow YAML if your GCP project or dataset names differ. This is the clearest “orchestrator runs the full batch” artifact for reviewers.
-
-**Flow inputs `start` / `end` (YYYY-MM):** Default `2019-01` … `2020-12`. Set both to e.g. `2020-12` for a **cheap smoke test**—but the ingest script **merges every Parquet already present** under `data/raw/nyc_taxi/yellow` and `green`. For a true one-month test, start from **empty** `data/raw/nyc_taxi/` (or only the months you need) before running the DAG. BigQuery loads use **WRITE_TRUNCATE**-style replacement for the merged tables (see script), not append duplication.
+**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra flows** under `kestra/flows/`: an **end-to-end** flow **`nyc_taxi_ingest_pipeline.yaml`** (three stages in a `Sequential` task), plus **split** flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For rubric “orchestrated batch to the data lake,” treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
 
 **Terraform** (from a machine with credentials — **do not commit** JSON keys):
 
@@ -269,6 +266,30 @@ Scripts default to README placeholders (`YOUR_GCP_PROJECT`, `YOUR_GCS_BUCKET`). 
 
 Flows use `{{ kv('GCP_BUCKET') }}` and `{{ kv('GCP_CREDS') }}`; values are **not** in the repo.
 
+**REST API (optional):** Open-source Kestra exposes KV under `/api/v1/main/namespaces/<namespace>/kv/<key>`. Many builds expect **`Content-Type: text/plain`**. For **`GCP_BUCKET`**, if the name contains **hyphens**, send a **JSON string** body (e.g. `"my-project-bucket"`) so the value is not truncated. **`GCP_CREDS`**: PUT the **raw JSON file contents** as `text/plain`. Use Basic Auth if enabled (see Docker Compose below).
+
+### Kestra: Docker Compose (local UI)
+
+Run the orchestrator **locally** from the **repository root** (the same folder as this README).
+
+| Item | Detail |
+|------|--------|
+| **Compose file** | `docker-compose.yml` — **Kestra** + **PostgreSQL** (flows and executions persist across restarts). |
+| **Custom image** | `Dockerfile.kestra` extends `kestra/kestra:latest` with the **`docker` CLI**. Mounting **`/var/run/docker.sock`** alone is not enough: flows that call `docker run` need the client binary inside the Kestra container. |
+| **Repo mount** | The project is mounted at **`/workspace`** inside Kestra so flows and scripts see the same tree as on the host. |
+| **Credentials file** | `./terraform/gcp-creds.json` is mounted for Kestra; keep that path valid (or adjust the compose file). **Do not commit** the JSON. |
+| **Web UI** | [http://localhost:8080](http://localhost:8080) — basic-auth defaults are in `docker-compose.yml` (`admin@company.com` / `StrongPass1`). **Change these for anything beyond local dev.** |
+| **First-time / after Dockerfile changes** | `docker compose build kestra` then `docker compose up -d`. |
+
+**Flow `nyc_taxi_ingest_pipeline` (TLC batch):**
+
+1. **Register** the YAML: paste into the UI or `PUT`/`POST` to `/api/v1/main/flows` (see [Kestra API](https://kestra.io/docs/how-to-guides/api)).
+2. Set **`variables.workspace_host`** in `kestra/flows/nyc_taxi_ingest_pipeline.yaml` to the **absolute host path of this repo** (Docker Desktop on Windows: forward slashes, e.g. `E:/IT_SPACES/AI/Projects/nyc-taxi-pipeline-analytics`). Nested `docker run -v` uses the **host** path, not `/workspace` inside Kestra, so this must match where you cloned the project.
+3. Ensure KV keys **`GCP_BUCKET`** and **`GCP_CREDS`** exist (namespace **`system`**).
+4. **Execute** with **narrow inputs** first (e.g. `start` = `end` = `2020-12`) to limit cost and runtime. Default inputs in the flow are **2019-01**–**2020-12** (full two-year range).
+
+**Important:** The **merge / upload** logic in `scripts/ingest_tlc_2019_2020.py` can consider **all** Parquet under `data/raw/nyc_taxi/` depending on stage. For a **true one-month** test, start with an empty or clean `data/raw` tree for that run, or only the months you intend—see script and flow comments.
+
 ### Terraform
 
 Same commands as in [End-to-end workflow (execution order)](#end-to-end-workflow-execution-order) (`cd terraform` → `init` / `plan` / `apply`). Defaults in `terraform/variables.tf` are **placeholders** (`your-gcp-project-id`, `your-gcs-bucket-name`); override with **`terraform.tfvars`** (gitignored) or `-var` flags before a real `apply`. Renaming the bucket may **create** a new bucket; clean up old resources if needed.
@@ -314,7 +335,7 @@ Then restore **local-only** files that are intentionally not in Git. Full checkl
 |-------------|------------------------------|
 | **Problem / scope** | [Project objective](#project-objective): two tracks (GitHub Archive + NYC TLC), lake → warehouse → dbt → Looker. |
 | **Cloud + IaC** | GCP (GCS, BigQuery); **Terraform** under `terraform/`. |
-| **Batch / orchestration** | Python ingest + **Kestra** flows (`kestra/flows/`); GCS as data lake. |
+| **Batch / orchestration** | Python ingest + **Kestra** flows (`kestra/flows/`, including **`nyc_taxi_ingest_pipeline`**); local stack: [Docker Compose](#kestra-docker-compose-local-ui); GCS as data lake. |
 | **Data warehouse** | BigQuery tables with **partitioning & clustering** (see [BigQuery optimization](#bigquery-optimization-partitioning-clustering-marts) and ingest script). |
 | **Transformations** | **dbt** `nyc_taxi_dbt`: staging → core → mart. |
 | **Dashboard** | Looker Studio on marts; exports under `docs/nyc-taxi-looker-analytics/`. |

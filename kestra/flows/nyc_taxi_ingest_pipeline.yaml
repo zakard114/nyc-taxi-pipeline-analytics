@@ -3,8 +3,9 @@
 #
 # Prerequisites (same as other flows):
 #   - KV: GCP_BUCKET, GCP_CREDS (JSON string)
-#   - docker-compose: repo mounted at /workspace, Docker socket available (see README)
+#   - docker-compose: repo mounted at /workspace, Docker socket + Dockerfile.kestra (docker CLI); see README
 #   - terraform/gcp-creds.json present on host (mounted into /workspace/terraform/)
+#   - variables.workspace_host = absolute host path to repo (nested docker bind; edit after clone)
 #
 # Requires Docker inside the Kestra container (docker.sock). Each step runs python:3.12-slim
 # with pip install from requirements-ingest.txt (idempotent; cache-friendly on repeat runs).
@@ -20,6 +21,9 @@ description: |
 variables:
   project_id: "zakard-de-project"
   bq_dataset: "trips_data_all"
+  # Host path for nested `docker run -v` (Docker Desktop). Must be the repo root on the *host*.
+  # Use forward slashes. Example: E:/path/to/nyc-taxi-pipeline-analytics
+  workspace_host: "E:/path/to/nyc-taxi-pipeline-analytics"
 
 # Optional: narrow YYYY-MM range for cheaper tests (e.g. 2020-12 only). The merge step uses
 # every *.parquet under data/raw/nyc_taxi/{yellow,green}/ — for a true one-month run, use an
@@ -36,57 +40,57 @@ inputs:
     description: "Last month YYYY-MM (ingest script --end)."
 
 tasks:
-  - id: tlc_download
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.core.runner.Process
-    commands:
-      - |
-        set -e
-        docker run --rm \
-          -v /workspace:/workspace \
-          -w /workspace \
-          -e GCP_PROJECT_ID="{{ vars.project_id }}" \
-          -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
-          -e BQ_DATASET="{{ vars.bq_dataset }}" \
-          -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-          -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --download-only --start {{ inputs.start }} --end {{ inputs.end }}"
+  # Commands tasks do not support dependsOn; order is enforced via Sequential.
+  - id: tlc_stages
+    type: io.kestra.plugin.core.flow.Sequential
+    tasks:
+      - id: tlc_download
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.core.runner.Process
+        commands:
+          - |
+            set -e
+            docker run --rm \
+              -v "{{ vars.workspace_host }}:/workspace" \
+              -w /workspace \
+              -e GCP_PROJECT_ID="{{ vars.project_id }}" \
+              -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
+              -e BQ_DATASET="{{ vars.bq_dataset }}" \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
+              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --download-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
-  - id: tlc_upload
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.core.runner.Process
-    dependsOn:
-      - tlc_download
-    commands:
-      - |
-        set -e
-        docker run --rm \
-          -v /workspace:/workspace \
-          -w /workspace \
-          -e GCP_PROJECT_ID="{{ vars.project_id }}" \
-          -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
-          -e BQ_DATASET="{{ vars.bq_dataset }}" \
-          -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-          -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --upload-only --start {{ inputs.start }} --end {{ inputs.end }}"
+      - id: tlc_upload
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.core.runner.Process
+        commands:
+          - |
+            set -e
+            docker run --rm \
+              -v "{{ vars.workspace_host }}:/workspace" \
+              -w /workspace \
+              -e GCP_PROJECT_ID="{{ vars.project_id }}" \
+              -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
+              -e BQ_DATASET="{{ vars.bq_dataset }}" \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
+              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --upload-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
-  - id: tlc_bigquery
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.core.runner.Process
-    dependsOn:
-      - tlc_upload
-    commands:
-      - |
-        set -e
-        docker run --rm \
-          -v /workspace:/workspace \
-          -w /workspace \
-          -e GCP_PROJECT_ID="{{ vars.project_id }}" \
-          -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
-          -e BQ_DATASET="{{ vars.bq_dataset }}" \
-          -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-          -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
-          python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --bq-only --start {{ inputs.start }} --end {{ inputs.end }}"
+      - id: tlc_bigquery
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.core.runner.Process
+        commands:
+          - |
+            set -e
+            docker run --rm \
+              -v "{{ vars.workspace_host }}:/workspace" \
+              -w /workspace \
+              -e GCP_PROJECT_ID="{{ vars.project_id }}" \
+              -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
+              -e BQ_DATASET="{{ vars.bq_dataset }}" \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
+              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --bq-only --start {{ inputs.start }} --end {{ inputs.end }}"

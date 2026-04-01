@@ -23,7 +23,10 @@ services:
 
   # 2. Kestra service: main pipeline execution engine
   kestra:
-    image: kestra/kestra:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.kestra
+    image: nyc-taxi-pipeline-analytics-kestra:local
     # Default image user cannot always create dirs under /app/storage; official compose uses root for local dev
     user: root
     command: server standalone  # Standalone mode (uses external DB instead of embedded)

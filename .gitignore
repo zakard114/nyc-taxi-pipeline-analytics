@@ -37,3 +37,7 @@ nyc_taxi_dbt/target/
 # Local TLC / Parquet (large; do not commit)
 data/**/*.parquet
 data/**/*.csv
+
+# Accidental local Kestra/Docker artifacts at repo root (optional)
+kestra-data/
+kestra-db/

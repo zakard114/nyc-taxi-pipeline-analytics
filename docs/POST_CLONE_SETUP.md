@@ -27,7 +27,12 @@ Run `cd nyc_taxi_dbt && dbt deps` (if applicable), `dbt seed`, `dbt run` after B
 
 ## Kestra
 
-Paste the same service account JSON into **Kestra KV** `GCP_CREDS` (see main README), or use Secret Manager in production.
+1. **Service account JSON** — Paste the same file you use locally into **Kestra KV** → key **`GCP_CREDS`** (namespace **`system`**). Never commit the file. See the main README table for **`GCP_BUCKET`** as well.
+2. **Run the stack** — From the repo root: `docker compose build kestra` (first time or after `Dockerfile.kestra` changes), then `docker compose up -d`. UI: [http://localhost:8080](http://localhost:8080); credentials are in `docker-compose.yml`.
+3. **Flow `nyc_taxi_ingest_pipeline`** — After clone, edit **`kestra/flows/nyc_taxi_ingest_pipeline.yaml`** → **`variables.workspace_host`** to your machine’s **absolute path** to this repository (Docker Desktop: forward slashes, e.g. `E:/path/to/nyc-taxi-pipeline-analytics`). Then import or sync the flow in the UI.
+4. **Production** — Prefer **Secret Manager** or your platform’s secret store instead of KV for long-lived keys.
+
+For KV over HTTP, see the main README (**REST API** note under Kestra KV): `text/plain` bodies and hyphenated bucket names as JSON strings.
 
 ## Quick verify
 
