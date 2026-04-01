@@ -17,6 +17,8 @@ This repository also includes a **GitHub Archive** ingestion track on the same G
 
 ![NYC TLC pipeline (conceptual)](docs/nyc-tlc-pipeline-architecture.png)
 
+*When updating diagrams or hero images, keep facts and style consistent with [`docs/image-and-diagram-guidelines.md`](docs/image-and-diagram-guidelines.md).*
+
 **Dashboard (static export)** — pre-aggregated marts as a single screen:
 
 ![NYC Taxi Data Pipeline Analytics (2019–2020) — Looker Studio](docs/nyc-taxi-looker-analytics/NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png)

@@ -1,6 +1,6 @@
-# Image guidelines for AI assistants (Gemini, etc.)
+# Image and diagram guidelines (NYC TLC portfolio)
 
-Use this when asking an AI to **draw, describe, or refine** diagrams for the **nyc-taxi-pipeline-analytics** README or portfolio.
+Use this when **adding or updating** architecture figures, README hero images, or related assets so they stay **factually aligned** with this repository.
 
 ## 1. Facts — do not invent
 
@@ -25,7 +25,9 @@ Use this when asking an AI to **draw, describe, or refine** diagrams for the **n
 - **Colors:** Neutral professional (e.g. blue = cloud/storage, green = warehouse, orange = transform, purple = BI)—or match Looker/GCP palette loosely; stay consistent.
 - **No misleading stock metaphors:** Avoid “Excel warehouse,” “single monolithic database” if the story is **lake + warehouse + dbt**.
 
-## 4. Copy-paste prompt (English) for Gemini
+## 4. Optional: English brief for illustrators
+
+Use this block as a **handoff** to a designer or external illustrator (copy as-is or adapt):
 
 ```
 You are illustrating a documented data engineering portfolio repo. Follow these constraints strictly:
@@ -45,8 +47,8 @@ Output: one clear left-to-right architecture diagram, labels in English, suitabl
 
 ## 5. Optional: Mermaid instead of raster
 
-If Gemini cannot export clean SVG, ask for **Mermaid `flowchart LR` or `graph TB`** source that matches the same steps; the README can embed Mermaid directly on GitHub.
+If a clean **SVG** export is impractical, use **Mermaid** (`flowchart LR` or `graph TB`) in the README that matches the same steps—GitHub renders Mermaid natively.
 
-## 6. Repo asset (AI-generated baseline)
+## 6. Reference asset in this repo
 
-A **baseline** diagram aligned with this guideline was generated for the portfolio: **`docs/nyc-tlc-pipeline-architecture.png`**. Treat it as a starting point; refine labels or style in Figma/Excalidraw if you need pixel-perfect branding.
+A **baseline** diagram aligned with these guidelines lives at **`docs/nyc-tlc-pipeline-architecture.png`**. Treat it as a starting point; refine labels or style in Figma, Excalidraw, or similar if you need pixel-perfect branding.
