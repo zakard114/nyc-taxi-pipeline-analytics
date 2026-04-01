@@ -42,7 +42,7 @@ Together, these tracks show **lake → warehouse → transformation → dashboar
 
 **NYC TLC — Looker Studio exports (PDF / PNG):** Static copies of the dashboard are in **`docs/nyc-taxi-looker-analytics/`** — see [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) for `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).pdf` and `.png`.
 
-> **Why two domains?** One track is **ingest/orchestration** (GitHub Archive → lake → BigQuery); the other is **modeling + BI** (NYC taxi → dbt → Looker). Showing **two subject areas** on purpose avoids a portfolio that reads as **only one business domain** (for example, taxi analytics alone)—reviewers can still see **breadth** (orchestration, lake patterns) and **depth** (dimensional models, marts) together.
+> **Why two domains?** One track is **ingest/orchestration** (GitHub Archive → lake → BigQuery); the other is **modeling + BI** (NYC taxi → dbt → Looker). Showing **two subject areas** on purpose avoids a portfolio that reads as **only one business domain** (for example, taxi analytics alone). Together they make **breadth** (orchestration, lake patterns) and **depth** (dimensional models, marts) visible in one repository.
 
 **Repository root for commands:** use **this folder** as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this project is nested inside a larger parent repo, use the path to **this** directory as the root. See [Standalone repository & GitHub](#standalone-repository--github).
 
