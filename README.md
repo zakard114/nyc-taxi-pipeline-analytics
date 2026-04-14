@@ -2,7 +2,7 @@
 
 End-to-end analytics on **GCP** (lake → **BigQuery** → **dbt** → **Looker Studio**), plus optional **GitHub Archive** ingestion and a **local** streaming demo (Redpanda → Flink → Postgres → **Grafana**).
 
-**How to read this doc:** Start with [Quick start](#quick-start) and [Project objective](#project-objective). Follow the [main NYC TLC batch](#end-to-end-workflow-execution-order) in order; use [Optional tracks](#optional-github-archive-track) for GitHub Archive, streaming, and extras ([Going the extra mile](#going-the-extra-mile-optional)).
+**Skim path:** [Quick start](#quick-start) and [Project objective](#project-objective), then walk the [NYC TLC batch](#end-to-end-workflow-execution-order) in order. [GitHub Archive](#optional-github-archive-track), [streaming](#realtime-streaming-green-flink-postgres), and [tests / CI](#going-the-extra-mile-optional) sit outside that spine on purpose.
 
 ---
 
@@ -14,15 +14,15 @@ End-to-end analytics on **GCP** (lake → **BigQuery** → **dbt** → **Looker 
 | **Main batch (NYC TLC)** — follow in order | [Project objective](#project-objective) · [End-to-end workflow](#end-to-end-workflow-execution-order) · [Terraform](#terraform) · [Ingest (NYC TLC)](#ingest-nyc-tlc) · [dbt data modeling](#dbt-data-modeling-layered-structure) · [Data validation](#data-validation-bigquery-sql) · [Looker Studio dashboard](#looker-studio-dashboard-nyc-tlc) · [Configuration (GCP and Kestra)](#configuration-gcp-and-kestra) |
 | **Optional tracks** | [GitHub Archive track](#optional-github-archive-track) · [Real-time streaming](#realtime-streaming-green-flink-postgres) · [Going the extra mile](#going-the-extra-mile-optional) |
 | **Deep dive** | [Story at a glance](#story-at-a-glance-nyc-tlc-track) · [Tech stack](#tech-stack) · [Architecture](#architecture-high-level) · [Current scope](#current-scope-this-repo) |
-| **Support & meta** | [Troubleshooting and FAQ](#troubleshooting-and-faq) · [Standalone repository & GitHub](#standalone-repository--github) · [Capability checklist](#capability-checklist-self-review) |
+| **Support & meta** | [Troubleshooting and FAQ](#troubleshooting-and-faq) · [Standalone repository & GitHub](#standalone-repository--github) · [What this repo is meant to show](#what-this-repo-is-meant-to-show) |
 
 ---
 
 ## Quick start
 
-Use this **numbered path** for the **NYC taxi batch** story (Parquet → GCS → BigQuery → dbt → Looker). **Do not commit** secrets (`credentials/gcp-service-account.json`, **`credentials/local-dev-ui.env`**, raw keys in Kestra KV). For local **Kestra / Grafana** logins, copy **`credentials/local-dev-ui.env.example`** → **`credentials/local-dev-ui.env`** and keep your real values only in the gitignored copy — see **`credentials/README.md`**.
+Below is the **NYC taxi batch** path I documented end to end (Parquet → GCS → BigQuery → dbt → Looker). **Never commit** secrets (`credentials/gcp-service-account.json`, **`credentials/local-dev-ui.env`**, raw keys in Kestra KV). For **Kestra / Grafana** defaults, copy **`credentials/local-dev-ui.env.example`** → **`credentials/local-dev-ui.env`** — details in **`credentials/README.md`**.
 
-1. **Clone** the repository and `cd` into the **clone root** (this folder — the one that contains this `README.md`).
+1. **Clone** and `cd` to the repo root (this folder — where this `README.md` lives).
 2. **Local setup after clone:** credentials, Python, dbt profiles — **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)**.
 3. **Install Python deps** (from the repo root): `pip install -r requirements.txt` (ingest script deps are pulled via [`requirements-ingest.txt`](requirements-ingest.txt) as referenced in `requirements.txt`).
 4. **GCP:** project with **BigQuery** + **GCS**; **service account** JSON with roles for Terraform, GCS, and BigQuery. Default path: **`credentials/gcp-service-account.json`** (see **`credentials/README.md`**) or set **`GCP_CREDS_PATH`**.
@@ -49,7 +49,7 @@ Use this **numbered path** for the **NYC taxi batch** story (Parquet → GCS →
 
 ## Repository root for commands
 
-Use **this folder** (the directory containing this README) as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this project lives inside a larger parent repo, use the path to **this** directory as the root. Publishing as its own repo: [Standalone repository & GitHub](#standalone-repository--github).
+Use **this folder**—the directory that contains this `README.md`—as the working directory for Terraform, dbt, and Python. In a normal clone, that is the **repository root**. If this tree lives inside a **larger parent repository**, still `cd` into **this project folder** before running any command in this document. See also [Standalone repository & GitHub](#standalone-repository--github).
 
 ---
 
@@ -74,20 +74,16 @@ Unless a script’s docstring says otherwise, run commands from the **repository
 
 ## Project objective
 
-This repository demonstrates **end-to-end data pipelines on Google Cloud** across **two complementary domains** on the **same GCP stack**:
+The work here is **end-to-end data pipelines on Google Cloud** on **one stack**, with two related storylines:
 
 | Track | Focus | Outcome |
 |-------|--------|---------|
-| **GitHub Archive** | **Ingestion & orchestration** (lake → warehouse): DuckDB-based extraction, **GCS** as the data lake, **Kestra**-orchestrated loads into **BigQuery**, partitioning where the load defines it | Breadth: orchestration, lake → warehouse |
-| **NYC TLC Taxi (Yellow & Green)** | **Batch** ingestion of TLC Parquet (`scripts/ingest_tlc_2019_2020.py`), **BigQuery** loads, **dbt** **staging → core → mart**, **Looker Studio** on mart tables | Depth: dimensional modeling, marts, BI |
+| **GitHub Archive** | **Ingestion & orchestration** (lake → warehouse): DuckDB-based extraction, **GCS**, **Kestra**-driven loads into **BigQuery** where partitioning matches the load | Emphasis on **orchestration** and lake-to-warehouse mechanics |
+| **NYC TLC Taxi (Yellow & Green)** | **Batch** Parquet through `scripts/ingest_tlc_2019_2020.py`, **BigQuery**, **dbt** **staging → core → mart**, **Looker Studio** on marts | Emphasis on **modeling**, marts, and BI |
 
-**Why GitHub Archive:** [GitHub Archive](https://www.gharchive.org/) provides hourly public JSON event streams. This repo uses a **small sample** (`github_events_100`) — not a full historical crawl — so cloud runs stay cheap and reviewable.
+[GitHub Archive](https://www.gharchive.org/) ships hourly public JSON; I keep a **small sample** (`github_events_100`) so the cloud path stays cheap to replay, not a full crawl.
 
-Together, these tracks show **lake → warehouse → transformation → dashboard**.
-
-**NYC TLC — Looker exports (PDF / PNG):** [`docs/nyc-taxi-looker-analytics/`](docs/nyc-taxi-looker-analytics/README.md).
-
-> **Why two domains?** One track is **ingest/orchestration** (GitHub → lake → BigQuery); the other is **modeling + BI** (taxi → dbt → Looker). Together they show **breadth** and **depth** in one repository.
+Together the paths read **lake → warehouse → transformation → dashboard**. **Looker exports (PDF / PNG):** [`docs/nyc-taxi-looker-analytics/`](docs/nyc-taxi-looker-analytics/README.md).
 
 ---
 
@@ -102,7 +98,7 @@ Together, these tracks show **lake → warehouse → transformation → dashboar
 | 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` — [Looker](#looker-studio-dashboard-nyc-tlc) |
 | 5. (Optional) Real-time | Redpanda → Flink → Postgres → Grafana | [Real-time streaming](#realtime-streaming-green-flink-postgres) |
 
-**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility. The **same logical pipeline** is **also** implemented as Kestra flows under `kestra/flows/batch/`: **`nyc_taxi_ingest_pipeline.yaml`** (sequential stages), plus split flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). Use **either** the script or Kestra as your automation story.
+**Batch orchestration (Kestra vs. Python script):** I document the TLC path with one **Python entrypoint** for easy replay. The **same pipeline** also exists under `kestra/flows/batch/` — e.g. **`nyc_taxi_ingest_pipeline.yaml`** (sequential stages), plus split flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). Pick **either** the script or Kestra depending on whether you prefer a single command or orchestrated tasks.
 
 ---
 
@@ -138,7 +134,7 @@ Defaults in `terraform/variables.tf` are **placeholders** (`your-gcp-project-id`
 The batch script loads **2019-01 through 2020-12** (`scripts/ingest_tlc_2019_2020.py`).
 
 - **Primary:** Reproducible public monthly files; **two full calendar years** for YoY and **COVID-19** effects in **2020**
-- **Secondary:** Smaller download / merge / load than full history — sensible for a portfolio
+- **Secondary:** Smaller download / merge / load than full history — keeps the demo bounded and fast to rerun
 
 ---
 
@@ -223,7 +219,7 @@ LIMIT 5;
 
 ## Looker Studio dashboard (NYC TLC)
 
-**Baseline:** **at least two tiles** — one **categorical** chart, one **time** chart, with clear titles.
+**Layout:** at least **two tiles** — one **categorical** chart, one **time** chart, with clear titles (what I aimed for in the static exports under `docs/nyc-taxi-looker-analytics/`).
 
 ### Report content (example)
 
@@ -381,7 +377,7 @@ Example panel title: **Real-time Vendor Activity**.
 
 ## Going the extra mile (optional)
 
-Not required for the core pipeline; useful for portfolio review.
+Beyond the core path — linting, tests, CI, and README checks that I keep green locally.
 
 | Area | What’s in this repo |
 |------|---------------------|
@@ -394,7 +390,7 @@ Not required for the core pipeline; useful for portfolio review.
 
 ## Story at a glance (NYC TLC track)
 
-Think of this pipeline as a **taxi dispatch office** turning public trip records into decisions people can see:
+Short version of the batch path — public trip files in, governed tables and charts out:
 
 | Step | What happens | Tools (in this repo) |
 |------|----------------|----------------------|
@@ -476,10 +472,10 @@ flowchart TD
 
 ## Current scope (this repo)
 
-| Status | Scope |
-|--------|--------|
-| **Done** | GitHub **ingestion** assets as documented; **NYC** batch ingest, **dbt** **staging → core → mart** (`dm_*` marts); **Looker Studio** (≥2 tiles) |
-| **Optional** | Extended TLC dates, extra Looker charts, **streaming** path — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
+| Focus | What |
+|-------|------|
+| **Implemented** | GitHub **ingestion** pieces as documented; **NYC** batch ingest; **dbt** **staging → core → mart** (`dm_*` marts); **Looker Studio** (≥2 tiles) |
+| **Optional / future** | Broader TLC dates, more Looker views, full **streaming** path — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
 
 ---
 
@@ -500,9 +496,20 @@ flowchart TD
 
 ## Standalone repository & GitHub
 
-For portfolios, **publish this folder as its own GitHub repository** and use **`git clone`**. **Git only transfers tracked files** — large Parquet, `venv`, `nyc_taxi_dbt/target/`, secrets stay out of the remote (see `.gitignore`).
+This repository is the **clone root** (this `README.md` is at the top level). Run every Terraform, dbt, and Python command from **this directory**. If you embed the project in a **larger monorepo**, still use **this folder** as the project root for the workflows documented here.
 
-**First-time publish:**
+**`git clone` only downloads tracked files.** Large Parquet under `data/raw/`, local `venv/`, dbt build output under `nyc_taxi_dbt/target/`, and secrets under `credentials/` are excluded by design (see `.gitignore`).
+
+**Clone and continue setup:**
+
+```bash
+git clone https://github.com/YOUR_USER/YOUR_REPO.git
+cd YOUR_REPO
+```
+
+Use this repository’s URL or your fork. Then follow **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)** for service accounts and other local-only configuration.
+
+**Optional — first-time `git push` from a fresh local folder** (e.g. you copied this tree out of a parent workspace and are creating a new remote). Initialize Git once; only tracked files are pushed:
 
 ```bash
 cd /path/to/this/project
@@ -515,25 +522,16 @@ git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
 git push -u origin main
 ```
 
-**Clone example:**
-
-```bash
-git clone https://github.com/YOUR_USER/YOUR_REPO.git E:\IT_SPACES\AI\Projects\my-repo
-cd E:\IT_SPACES\AI\Projects\my-repo
-```
-
-Then restore local-only files: **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)**.
-
 ---
 
-## Capability checklist (self-review)
+## What this repo is meant to show
 
-| Criterion | How this repo addresses it |
+| Topic | Where to look |
 |-------------|------------------------------|
-| **Problem / scope** | [Project objective](#project-objective): GitHub Archive + NYC TLC, lake → warehouse → dbt → Looker |
+| **Scope / story** | [Project objective](#project-objective): GitHub Archive + NYC TLC, lake → warehouse → dbt → Looker |
 | **Cloud + IaC** | GCP (GCS, BigQuery); **Terraform** under `terraform/` |
 | **Batch / orchestration** | Python ingest + **Kestra** `kestra/flows/batch/`; streaming: `kestra/flows/stream/`; **Flink** + Postgres — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
-| **Data warehouse** | BigQuery **partitioning & clustering** — [BigQuery optimization](#bigquery-optimization-partitioning-clustering-marts) |
-| **Transformations** | **dbt** `nyc_taxi_dbt` |
-| **Dashboard** | **Looker Studio**; exports under `docs/nyc-taxi-looker-analytics/`; **Grafana** on **`trip_stats_realtime`** |
-| **Reproducibility** | [Quick start](#quick-start), [Configuration](#configuration-gcp-and-kestra), [`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md). Optional: [Going the extra mile](#going-the-extra-mile-optional) |
+| **Warehouse modeling** | BigQuery **partitioning & clustering** — [BigQuery optimization](#bigquery-optimization-partitioning-clustering-marts) |
+| **Transforms** | **dbt** `nyc_taxi_dbt` |
+| **Dashboards** | **Looker Studio**; exports under `docs/nyc-taxi-looker-analytics/`; optional **Grafana** on **`trip_stats_realtime`** |
+| **Reproducibility** | [Quick start](#quick-start), [Configuration](#configuration-gcp-and-kestra), [`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md); [Going the extra mile](#going-the-extra-mile-optional) for CI and tests |
