@@ -6,8 +6,13 @@ seeds:
     columns:
       - name: locationid
         description: "TLC location id."
+        data_tests:
+          - not_null
+          - unique
       - name: borough
         description: "Borough."
+        data_tests:
+          - not_null
       - name: zone
         description: "Zone name."
       - name: service_zone

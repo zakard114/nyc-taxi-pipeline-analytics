@@ -1,27 +1,20 @@
-# Start Kestra via Docker Compose
-# Run from Project folder: .\scripts\start_kestra.ps1
+# Optional helper: start local Kestra stack (see README — Docker Compose).
+# Run from repository root.
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot\..
 
-# 1. Check Docker
-Write-Host "Checking Docker..." -ForegroundColor Cyan
-try {
-    $null = docker info 2>&1
-} catch {
-    Write-Host "Docker is not running. Please start Docker Desktop and retry." -ForegroundColor Red
-    exit 1
+# 1. Repo root = parent of scripts/
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
+
+# 2. Ensure service account exists for volume mount (docker-compose)
+$credPath = Join-Path $RepoRoot "credentials\gcp-service-account.json"
+if (-not (Test-Path $credPath)) {
+    Write-Host "WARNING: $credPath not found. Create it (see credentials\README.md) or Docker will fail to mount." -ForegroundColor Yellow
 }
 
-# 2. Ensure gcp-creds exists for volume mount
-if (-not (Test-Path "terraform\gcp-creds.json")) {
-    Write-Host "WARNING: terraform\gcp-creds.json not found. Creating placeholder (replace with real key)." -ForegroundColor Yellow
-    if (-not (Test-Path "terraform")) { New-Item -ItemType Directory -Path "terraform" -Force }
-    '{}' | Out-File -FilePath "terraform\gcp-creds.json" -Encoding utf8
-}
-
-# 3. Run docker compose
-Write-Host "Starting Kestra..." -ForegroundColor Cyan
+docker compose build kestra
 docker compose up -d
 
-Write-Host "`nKestra UI: http://localhost:8080" -ForegroundColor Green
+Write-Host "Kestra UI: http://localhost:8090 (see docker-compose.yml for credentials)." -ForegroundColor Green

@@ -1,5 +1,6 @@
 """
-Download NYC TLC Yellow/Green Parquet (2019-01 .. 2020-12), upload to GCS, load into BigQuery.
+Download NYC TLC Yellow/Green Parquet (2019-01 .. 2020-12), upload to GCS,
+load into BigQuery.
 
 Example (full pipeline; needs network + GCP creds):
   cd DE/Project
@@ -18,8 +19,8 @@ BigQuery output tables (dataset trips_data_all):
   yellow_tripdata_2019_2020
   green_tripdata_2019_2020
 
-Loads use merged Parquet (PyArrow) for both colors — multi-file wildcard loads can mis-parse
-timestamps when schemas differ across months.
+Loads use merged Parquet (PyArrow) for both colors — multi-file wildcard loads can
+mis-parse timestamps when schemas differ across months.
 
 After success, run: cd nyc_taxi_dbt && dbt seed && dbt run
 
@@ -27,7 +28,8 @@ Environment (optional; defaults match README placeholders — set for your GCP p
   GCP_PROJECT_ID   BigQuery / GCS project (default: YOUR_GCP_PROJECT)
   GCS_BUCKET       Lake bucket name (default: YOUR_GCS_BUCKET)
   BQ_DATASET       Dataset for trip tables (default: trips_data_all)
-  GCP_CREDS_PATH   Path to service account JSON (default: <repo>/terraform/gcp-creds.json)
+  GCP_CREDS_PATH   Path to service account JSON
+  (default: <repo>/credentials/gcp-service-account.json)
 """
 
 from __future__ import annotations
@@ -56,10 +58,16 @@ TABLE_YELLOW = "yellow_tripdata_2019_2020"
 TABLE_GREEN = "green_tripdata_2019_2020"
 
 _creds_override = os.environ.get("GCP_CREDS_PATH", "").strip()
-CREDS = Path(_creds_override) if _creds_override else PROJECT_ROOT / "terraform" / "gcp-creds.json"
+CREDS = (
+    Path(_creds_override)
+    if _creds_override
+    else PROJECT_ROOT / "credentials" / "gcp-service-account.json"
+)
 
 
-def ym_list(start_year: int, start_month: int, end_year: int, end_month: int) -> list[str]:
+def ym_list(
+    start_year: int, start_month: int, end_year: int, end_month: int
+) -> list[str]:
     out: list[str] = []
     y, m = start_year, start_month
     while True:
@@ -80,7 +88,9 @@ def download_one(url: str, dest: Path, retries: int = 3) -> bool:
         return True
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ingest_tlc_2019_2020)"})
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0 (ingest_tlc_2019_2020)"}
+            )
             with urllib.request.urlopen(req, timeout=300) as r:
                 dest.write_bytes(r.read())
             print(f"  ok: {dest.name}")
@@ -115,13 +125,17 @@ def step_upload() -> bool:
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(BUCKET)
 
-    for folder, prefix in ((DATA_YELLOW, GCS_PREFIX_YELLOW), (DATA_GREEN, GCS_PREFIX_GREEN)):
+    for folder, prefix in (
+        (DATA_YELLOW, GCS_PREFIX_YELLOW),
+        (DATA_GREEN, GCS_PREFIX_GREEN),
+    ):
         if not folder.is_dir():
             print(f"Missing folder: {folder}")
             return False
         for p in sorted(folder.glob("*.parquet")):
             blob = bucket.blob(f"{prefix}/{p.name}")
-            # Large Parquet files need a generous timeout (default 60s often fails on home networks).
+            # Large Parquet files need a generous timeout (default 60s often fails on
+            # home networks).
             blob.upload_from_filename(str(p), timeout=900)
             print(f"  gcs: gs://{BUCKET}/{prefix}/{p.name}")
     return True
@@ -134,9 +148,19 @@ def _arrow_field_to_bq(field) -> "object":
 
     t = field.type
     mode = "NULLABLE"
-    if pa.types.is_int64(t) or pa.types.is_int32(t) or pa.types.is_int16(t) or pa.types.is_int8(t):
+    if (
+        pa.types.is_int64(t)
+        or pa.types.is_int32(t)
+        or pa.types.is_int16(t)
+        or pa.types.is_int8(t)
+    ):
         bq_type = "INT64"
-    elif pa.types.is_uint64(t) or pa.types.is_uint32(t) or pa.types.is_uint16(t) or pa.types.is_uint8(t):
+    elif (
+        pa.types.is_uint64(t)
+        or pa.types.is_uint32(t)
+        or pa.types.is_uint16(t)
+        or pa.types.is_uint8(t)
+    ):
         bq_type = "INT64"
     elif pa.types.is_float64(t) or pa.types.is_float32(t):
         bq_type = "FLOAT64"
@@ -167,14 +191,16 @@ def arrow_schema_to_bq(arrow_schema) -> list:
 
 
 def _coerce_datetime_columns(merged, timestamp_cols: tuple[str, ...]):
-    """Normalize TLC pickup/dropoff columns to TIMESTAMP(us) so BigQuery does not mis-read mixed Parquet types."""
+    """Normalize TLC pickup/dropoff columns to TIMESTAMP(us) so BigQuery does not
+    mis-read mixed Parquet types."""
     import pyarrow as pa
     import pyarrow.compute as pc
 
     target = pa.timestamp("us")
 
     def int_to_timestamp(col):
-        # Try common physical encodings after schema unify (int/float → wrong buckets in BQ if left as-is).
+        # Try common physical encodings after schema unify (int/float → wrong buckets
+        # in BQ if left as-is).
         for unit in ("ns", "us", "ms", "s"):
             try:
                 ts = pc.cast(col, pa.timestamp(unit))
@@ -195,7 +221,9 @@ def _coerce_datetime_columns(merged, timestamp_cols: tuple[str, ...]):
         else:
             continue
         old_f = merged.schema.field(idx)
-        merged = merged.set_column(idx, pa.field(old_f.name, target, nullable=old_f.nullable), arr)
+        merged = merged.set_column(
+            idx, pa.field(old_f.name, target, nullable=old_f.nullable), arr
+        )
     return merged
 
 
@@ -259,20 +287,22 @@ def merge_parquets_local(
     label: str,
     timestamp_cols: tuple[str, ...] = (),
 ) -> Path:
-    """Merge Parquet files with unified types. Streams one file at a time to avoid RAM spikes."""
+    """Merge Parquet files with unified types. Streams one file at a time to avoid RAM
+    spikes."""
     try:
-        import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError as e:
         raise RuntimeError("pip install pyarrow") from e
 
     paths = sorted(p for p in data_dir.glob(glob_pattern) if p.name != merged_basename)
     if not paths:
-        raise FileNotFoundError(f"No parquet files matching {glob_pattern!r} under {data_dir}")
+        raise FileNotFoundError(
+            f"No parquet files matching {glob_pattern!r} under {data_dir}"
+        )
     if len(paths) < 20:
         print(
-            f"  warning: only {len(paths)} parquet file(s) — expected ~24 months for 2019-01..2020-12; "
-            "run --download-only with full range before --bq-only."
+            f"  warning: only {len(paths)} parquet file(s) - expected ~24 months for "
+            "2019-01..2020-12; run --download-only with full range before --bq-only."
         )
 
     unified = _unify_parquet_schemas(paths, pq)
@@ -292,7 +322,9 @@ def merge_parquets_local(
                 coerce_timestamps="us",
             )
         except (TypeError, ValueError):
-            return pq.ParquetWriter(path_out, schema, compression="snappy", version="2.6")
+            return pq.ParquetWriter(
+                path_out, schema, compression="snappy", version="2.6"
+            )
 
     try:
         for i, path in enumerate(paths):
@@ -309,7 +341,11 @@ def merge_parquets_local(
         if writer is not None:
             writer.close()
 
-    pick = timestamp_cols[0] if timestamp_cols and timestamp_cols[0] in unified.names else None
+    pick = (
+        timestamp_cols[0]
+        if timestamp_cols and timestamp_cols[0] in unified.names
+        else None
+    )
     if pick:
         import pyarrow.compute as pc
 
@@ -369,13 +405,16 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         *,
         bq_schema: list | None = None,
     ) -> None:
-        """Single merged Parquet — prefer explicit schema so BQ does not mis-map TIMESTAMP columns.
+        """Single merged Parquet — prefer explicit schema so BQ does not mis-map
+        TIMESTAMP columns.
 
-        Applies **daily** time partitioning on ``partition_field`` and **clustering** on
-        ``VendorID``, ``PULocationID`` (NYC TLC Parquet column names) for filter/join-friendly scans.
+        Applies **daily** time partitioning on ``partition_field`` and **clustering**
+        on ``VendorID``, ``PULocationID`` (NYC TLC Parquet column names) for
+        filter/join-friendly scans.
         """
         table_id = f"{dataset_ref}.{table}"
-        # Aligns with Kestra flows (gcs_to_bigquery*.yaml) and documented warehouse design (partition + cluster).
+        # Aligns with Kestra flows (gcs_to_bigquery*.yaml) and documented warehouse
+        # design (partition + cluster).
         clustering_fields = ["VendorID", "PULocationID"]
         base_cfgs: list[bigquery.LoadJobConfig] = []
         if bq_schema:
@@ -422,7 +461,9 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         last_err: Exception | None = None
         for job_config in base_cfgs:
             try:
-                load_job = client.load_table_from_uri(uri, table_id, job_config=job_config)
+                load_job = client.load_table_from_uri(
+                    uri, table_id, job_config=job_config
+                )
                 load_job.result()
                 t = client.get_table(table_id)
                 print(f"OK BigQuery: {table_id} rows={t.num_rows}")
@@ -444,8 +485,9 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         c = int(rows[0].c) if rows else 0
         if c < 500_000:
             raise RuntimeError(
-                f"Yellow sanity check failed: only {c} rows in 2019-03 (expect ~millions). "
-                "Re-download all monthly Parquet files, re-run merge + load."
+                f"Yellow sanity check failed: only {c} rows in 2019-03 "
+                "(expect ~millions). Re-download all monthly Parquet files, re-run "
+                "merge + load."
             )
         print(f"  OK sanity: yellow 2019-03 rows={c}")
 
@@ -460,8 +502,8 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         c = int(rows[0].c) if rows else 0
         if c < 10_000:
             raise RuntimeError(
-                f"Green sanity check failed: only {c} rows in 2019-03 (expect much more). "
-                "Re-download monthly Parquet and re-run."
+                f"Green sanity check failed: only {c} rows in 2019-03 "
+                "(expect much more). Re-download monthly Parquet and re-run."
             )
         print(f"  OK sanity: green 2019-03 rows={c}")
 
@@ -475,7 +517,10 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         try:
             yellow_bq_schema = arrow_schema_to_bq(pq.read_schema(yellow_merged))
         except (ValueError, TypeError) as e:
-            print(f"  warning: could not build explicit BQ schema for yellow: {e}; using autodetect")
+            print(
+                f"  warning: could not build explicit BQ schema for yellow: {e}; "
+                "using autodetect"
+            )
             yellow_bq_schema = None
 
         yellow_blob = f"{GCS_PREFIX_YELLOW}/yellow_tripdata_merged.parquet"
@@ -494,7 +539,10 @@ def step_bigquery(*, skip_sanity: bool = False) -> bool:
         try:
             green_bq_schema = arrow_schema_to_bq(pq.read_schema(green_merged))
         except (ValueError, TypeError) as e:
-            print(f"  warning: could not build explicit BQ schema for green: {e}; using autodetect")
+            print(
+                f"  warning: could not build explicit BQ schema for green: {e}; "
+                "using autodetect"
+            )
             green_bq_schema = None
 
         green_blob = f"{GCS_PREFIX_GREEN}/green_tripdata_merged.parquet"

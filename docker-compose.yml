@@ -1,8 +1,11 @@
-# Kestra with PostgreSQL - persists accounts and flows across docker-compose down/up
+# Kestra + PostgreSQL + Redpanda + Flink + Grafana (streaming viz on Postgres).
+# Port note: Kestra 8090; Flink 9081; Redpanda 9092; Grafana 3000.
 volumes:
   postgres-data:  # Virtual disk for database (accounts, flow data)
     driver: local
   kestra-data:  # Virtual disk for runtime files (logs, storage)
+    driver: local
+  grafana-data:  # Grafana dashboards / internal DB (local dev)
     driver: local
 
 services:
@@ -31,17 +34,20 @@ services:
     user: root
     command: server standalone  # Standalone mode (uses external DB instead of embedded)
     ports:
-      - "8080:8080"  # Web UI (http://localhost:8080)
-      - "8081:8081"  # Internal communication
+      # Host 8090 → Kestra Web UI (8080 is often taken by other tools on the same machine)
+      - "8090:8080"
+      - "8081:8081"
     volumes:
       - kestra-data:/app/storage
       # Full repo at /workspace so Kestra flow nyc_taxi_ingest_pipeline can docker-run the ingest script (data/, scripts/, terraform/).
       - ./:/workspace
-      - ./terraform/gcp-creds.json:/app/gcp-creds.json:ro
+      - ./credentials/gcp-service-account.json:/app/gcp-service-account.json:ro
       # Required for tasks that spawn Docker (e.g. io.kestra.plugin.gcp.cli.GCloudCLI → google/cloud-sdk).
       # Without this, you may see: java.net.SocketException: No such file or directory (no docker.sock).
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      # Same file as on host: credentials/gcp-service-account.json
+      GOOGLE_APPLICATION_CREDENTIALS: /app/gcp-service-account.json
       KESTRA_CONFIGURATION: |
         datasources:
           postgres:
@@ -62,6 +68,84 @@ services:
               base-path: "/app/storage"
           queue:
             type: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 3. Redpanda — Kafka-compatible broker (host: localhost:9092; Docker network: redpanda:29092)
+  redpanda:
+    image: redpandadata/redpanda:v23.2.17
+    command:
+      - redpanda
+      - start
+      - --smp
+      - "1"
+      - --overprovisioned
+      - --node-id
+      - "0"
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr
+      - PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  # 4. Apache Flink session cluster — SQL Client: docker exec into flink-jobmanager (see README)
+  # Host JARs: put *.jar in ./flink-libs/ (gitignored). On start, copy into /opt/flink/lib (Flink only loads lib/*.jar, not subfolders).
+  flink-jobmanager:
+    image: flink:1.18.1-scala_2.12
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        find /extra-flink-libs -maxdepth 1 -name '*.jar' -exec cp -v {} /opt/flink/lib/ \;
+        exec /docker-entrypoint.sh jobmanager
+    ports:
+      # Host 9081 → Flink REST / Web UI (avoid clash with Kestra on 8080–8081)
+      - "9081:8081"
+      - "6123:6123"
+    volumes:
+      - ./flink-libs:/extra-flink-libs:ro
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+
+  flink-taskmanager:
+    image: flink:1.18.1-scala_2.12
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        find /extra-flink-libs -maxdepth 1 -name '*.jar' -exec cp -v {} /opt/flink/lib/ \;
+        exec /docker-entrypoint.sh taskmanager
+    depends_on:
+      - flink-jobmanager
+    volumes:
+      - ./flink-libs:/extra-flink-libs:ro
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+
+  # 5. Grafana — dashboards on local Postgres (e.g. trip_stats_realtime). Same Compose network as postgres.
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
     depends_on:
       postgres:
         condition: service_healthy

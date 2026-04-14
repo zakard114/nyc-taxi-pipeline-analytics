@@ -1,0 +1,110 @@
+# =============================================================================
+# nyc_taxi_realtime_ingest  (kestra/flows/stream/ — batch TLC flows: kestra/flows/batch/)
+# Orchestrates scripts/streaming/producer.py: stream Green taxi Parquet rows to Redpanda.
+#
+# Prerequisites:
+#   - docker compose up -d redpanda (broker on Compose network as redpanda:29092; host localhost:9092)
+#   - Edit variables.workspace_host to your clone path (forward slashes, e.g. E:/path/to/repo)
+#   - Parquet under repo (e.g. green_tripdata_2021-01.parquet) or run scripts/streaming/producer.py locally with --fetch-missing
+#
+# Notes:
+#   - Producer: scripts/streaming/producer.py (kafka-python). Bind mount is repo root -> /workspace.
+#   - Task uses the same pattern as nyc_taxi_ingest_pipeline: Process runner + explicit docker run -v
+#     (nested io.kestra.plugin.scripts.runner.docker.Docker volumes can fail to bind).
+#   - Producer runs in a sibling docker run: attach the same Docker network as the running Redpanda container
+#     (resolved at runtime via docker inspect; avoids wrong hardcoded *_default name). Bootstrap redpanda:29092.
+#   - Namespace system matches other flows in this repo; use company.team in UI only if you create it.
+# =============================================================================
+
+id: nyc_taxi_realtime_ingest
+namespace: system
+
+description: |
+  NYC TLC Green taxi Parquet → Redpanda (bounded demo via scripts/streaming/producer.py --max-rows).
+
+variables:
+  # Host path to repository root for bind mount (nested Docker). Must match your machine.
+  workspace_host: "E:/IT_SPACES/AI/Projects/nyc-taxi-pipeline-analytics"
+  # In-network Kafka listener (this flow always docker run --network <compose>). Not an Execute input — avoids stale UI values like host.docker.internal:9092.
+  kafka_bootstrap: "redpanda:29092"
+
+inputs:
+  - id: max_rows
+    type: INT
+    defaults: 50
+    description: "Row cap for streaming producer (--max-rows)."
+  - id: docker_network
+    type: STRING
+    required: false
+    description: "Optional. Set to skip broker lookup (e.g. myproject_default from docker network ls). Leave unset for auto-discovery."
+
+tasks:
+  - id: produce_taxi_data
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - |
+        set -e
+        MANUAL_NET='{{ inputs.docker_network | default("") }}'
+        # Strip Windows CR, newlines, spaces (paste/UI can inject \\r or line breaks — breaks docker --network).
+        MANUAL_NET=$(printf '%s' "$MANUAL_NET" | tr -d '\r' | head -n1)
+        MANUAL_NET=$(echo "$MANUAL_NET" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        if [ -n "$MANUAL_NET" ] && docker network inspect "$MANUAL_NET" >/dev/null 2>&1; then
+          DOCKER_NETWORK="$MANUAL_NET"
+          echo "Using manual Docker network: $DOCKER_NETWORK"
+        else
+          if [ -n "$MANUAL_NET" ]; then
+            echo "WARN: Docker network '$MANUAL_NET' not found on this Docker daemon; auto-discovering from running broker." >&2
+            echo "--- docker network ls (this worker) ---" >&2
+            docker network ls >&2 || true
+          fi
+          # Find broker: Compose label, image, host port 9092, or name (order favors typical compose setups).
+          REDPANDA_CID=$(docker ps --no-trunc -qf "label=com.docker.compose.service=redpanda" | head -n1)
+          if [ -z "$REDPANDA_CID" ]; then
+            REDPANDA_CID=$(docker ps --no-trunc -qf "ancestor=redpandadata/redpanda" | head -n1)
+          fi
+          if [ -z "$REDPANDA_CID" ]; then
+            REDPANDA_CID=$(docker ps --no-trunc -qf "publish=9092" | head -n1)
+          fi
+          if [ -z "$REDPANDA_CID" ]; then
+            REDPANDA_CID=$(docker ps --no-trunc -qf "name=redpanda" | head -n1)
+          fi
+          if [ -z "$REDPANDA_CID" ]; then
+            echo "ERROR: No broker container found (Compose service=redpanda, image redpandadata/redpanda, publish=9092, name~=redpanda)." >&2
+            echo "Fix: from repo root run: docker compose up -d redpanda   OR set flow input docker_network to your compose network (docker network ls)." >&2
+            echo "--- docker ps -a (this worker) ---" >&2
+            docker ps -a >&2 || true
+            exit 1
+          fi
+          DOCKER_NETWORK=""
+          DOCKER_FALLBACK=""
+          for net in $(docker network ls | tail -n +2 | awk '{print $2}'); do
+            case "$net" in bridge|host|none) continue ;; esac
+            if docker network inspect "$net" 2>/dev/null | grep -qF "$REDPANDA_CID"; then
+              case "$net" in
+                *_default) DOCKER_NETWORK="$net"; break ;;
+                *) [ -z "$DOCKER_FALLBACK" ] && DOCKER_FALLBACK="$net" ;;
+              esac
+            fi
+          done
+          if [ -z "$DOCKER_NETWORK" ]; then
+            DOCKER_NETWORK="$DOCKER_FALLBACK"
+          fi
+          if [ -z "$DOCKER_NETWORK" ]; then
+            echo "ERROR: Broker container $REDPANDA_CID has no user-defined network; set input docker_network manually." >&2
+            exit 1
+          fi
+          echo "Using Docker network: $DOCKER_NETWORK (broker container $REDPANDA_CID)"
+        fi
+        if [ -z "$DOCKER_NETWORK" ]; then
+          echo "ERROR: Could not resolve a Docker network for the producer. Run: docker compose up -d redpanda" >&2
+          exit 1
+        fi
+        echo "Checking TCP to {{ vars.kafka_bootstrap }} on network $DOCKER_NETWORK (before pip)..." >&2
+        docker run --rm --network "$DOCKER_NETWORK" python:3.12-slim bash -c "python -c \"import socket; h,p='{{ vars.kafka_bootstrap }}'.split(':'); socket.create_connection((h,int(p)),8); print('Broker TCP OK')\""
+        docker run --rm \
+          --network "$DOCKER_NETWORK" \
+          -v "{{ vars.workspace_host }}:/workspace:ro" \
+          -w /workspace \
+          python:3.12-slim bash -c "pip install --no-cache-dir kafka-python \"pandas>=2.0.0\" \"pyarrow>=14.0.0\" && python scripts/streaming/producer.py --max-rows {{ inputs.max_rows }} --bootstrap '{{ vars.kafka_bootstrap }}'"

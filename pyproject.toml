@@ -1,0 +1,22 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "nyc_taxi_dbt/target",
+  "nyc_taxi_dbt/dbt_packages",
+  "nyc_taxi_dbt/logs",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+# Lazy imports inside long-running steps (optional GCP / PyArrow).
+[tool.ruff.lint.per-file-ignores]
+"scripts/ingest_tlc_2019_2020.py" = ["I001"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

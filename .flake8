@@ -1,0 +1,16 @@
+[flake8]
+# Black 기본 줄 길이(88)와 맞춤 — E501(줄 길이) 불일치를 줄입니다.
+max-line-length = 88
+# Black과 슬라이스/콜론 주변 공백 규칙이 달라서 무시 (공식 권장)
+extend-ignore = E203
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    .eggs,
+    *.egg,
+    build,
+    dist,
+    .mypy_cache,
+    .pytest_cache

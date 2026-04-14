@@ -1,29 +1,74 @@
 # Data Engineering Portfolio (GitHub Archive + NYC TLC Taxi)
 
-## Story at a glance (NYC TLC track)
+End-to-end analytics on **GCP** (lake → **BigQuery** → **dbt** → **Looker Studio**), plus optional **GitHub Archive** ingestion and a **local** streaming demo (Redpanda → Flink → Postgres → **Grafana**).
 
-Think of this pipeline as a **taxi dispatch office** turning public trip records into decisions people can see:
+**How to read this doc:** Start with [Quick start](#quick-start) and [Project objective](#project-objective). Follow the [main NYC TLC batch](#end-to-end-workflow-execution-order) in order; use [Optional tracks](#optional-github-archive-track) for GitHub Archive, streaming, and extras ([Going the extra mile](#going-the-extra-mile-optional)).
 
-| Step | What happens | Tools (in this repo) |
-|------|----------------|----------------------|
-| 🚚 **Ingestion** | NYC TLC publishes monthly Parquet; we **bring it in** and normalize it for the cloud. | Python, PyArrow (`scripts/ingest_tlc_2019_2020.py`); optional **Kestra** (`kestra/flows/`) |
-| 🏠 **Lake & warehouse** | Files land in **GCS** (lake), then load into **BigQuery** with **partitioning** and **clustering** so time- and vendor-heavy queries stay fast. | GCS → BigQuery loads |
-| 🍳 **Transformation** | Raw trips become **staging → core → mart** models—monthly and service-type metrics instead of row-by-row receipts. | **dbt** (`nyc_taxi_dbt/`) |
-| 📊 **Visualization** | Marts feed a **Looker Studio** report so trends (e.g. **2019 vs 2020**, COVID-era dips) are obvious without writing SQL first. | Looker Studio on mart tables |
+---
 
-This repository also includes a **GitHub Archive** ingestion track on the same GCP stack (orchestration + lake → BigQuery); see [Project objective](#project-objective) and [Architecture (high level)](#architecture-high-level).
+## Table of contents
 
-**Pipeline (conceptual)** — NYC TLC batch path (Parquet → GCS → BigQuery → dbt → Looker):
+| Read first | Sections |
+|------------|----------|
+| **Onboarding** | [Quick start](#quick-start) · [Prerequisites](#prerequisites) · [Repository root](#repository-root-for-commands) · [Repository layout](#repository-layout-where-things-live) |
+| **Main batch (NYC TLC)** — follow in order | [Project objective](#project-objective) · [End-to-end workflow](#end-to-end-workflow-execution-order) · [Terraform](#terraform) · [Ingest (NYC TLC)](#ingest-nyc-tlc) · [dbt data modeling](#dbt-data-modeling-layered-structure) · [Data validation](#data-validation-bigquery-sql) · [Looker Studio dashboard](#looker-studio-dashboard-nyc-tlc) · [Configuration (GCP and Kestra)](#configuration-gcp-and-kestra) |
+| **Optional tracks** | [GitHub Archive track](#optional-github-archive-track) · [Real-time streaming](#realtime-streaming-green-flink-postgres) · [Going the extra mile](#going-the-extra-mile-optional) |
+| **Deep dive** | [Story at a glance](#story-at-a-glance-nyc-tlc-track) · [Tech stack](#tech-stack) · [Architecture](#architecture-high-level) · [Current scope](#current-scope-this-repo) |
+| **Support & meta** | [Troubleshooting and FAQ](#troubleshooting-and-faq) · [Standalone repository & GitHub](#standalone-repository--github) · [Capability checklist](#capability-checklist-self-review) |
 
-![NYC TLC pipeline (conceptual)](docs/nyc-tlc-pipeline-architecture.png)
+---
 
-*When updating diagrams or hero images, keep facts and style consistent with [`docs/image-and-diagram-guidelines.md`](docs/image-and-diagram-guidelines.md).*
+## Quick start
 
-**Dashboard (static export)** — pre-aggregated marts as a single screen:
+Use this **numbered path** for the **NYC taxi batch** story (Parquet → GCS → BigQuery → dbt → Looker). **Do not commit** secrets (`credentials/gcp-service-account.json`, **`credentials/local-dev-ui.env`**, raw keys in Kestra KV). For local **Kestra / Grafana** logins, copy **`credentials/local-dev-ui.env.example`** → **`credentials/local-dev-ui.env`** and keep your real values only in the gitignored copy — see **`credentials/README.md`**.
 
-![NYC Taxi Data Pipeline Analytics (2019–2020) — Looker Studio](docs/nyc-taxi-looker-analytics/NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png)
+1. **Clone** the repository and `cd` into the **clone root** (this folder — the one that contains this `README.md`).
+2. **Local setup after clone:** credentials, Python, dbt profiles — **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)**.
+3. **Install Python deps** (from the repo root): `pip install -r requirements.txt` (ingest script deps are pulled via [`requirements-ingest.txt`](requirements-ingest.txt) as referenced in `requirements.txt`).
+4. **GCP:** project with **BigQuery** + **GCS**; **service account** JSON with roles for Terraform, GCS, and BigQuery. Default path: **`credentials/gcp-service-account.json`** (see **`credentials/README.md`**) or set **`GCP_CREDS_PATH`**.
+5. **Environment variables** for ingest/upload — set at least `GCP_PROJECT_ID`, `GCS_BUCKET`, and optionally `BQ_DATASET` (default `trips_data_all`). Full table: [Environment variables](#environment-variables-python-upload--ingest).
+6. **Infrastructure:** `cd terraform && terraform init && terraform plan && terraform apply` — details: [Terraform](#terraform).
+7. **Ingest TLC data:** `python scripts/ingest_tlc_2019_2020.py` (network + GCP required). Scope: **2019-01 … 2020-12** Yellow/Green — [Ingest (NYC TLC)](#ingest-nyc-tlc).
+8. **Transform:** `cd nyc_taxi_dbt && dbt seed && dbt run` — `profiles.yml` must point at **your** project and dataset — [dbt](#dbt-data-modeling-layered-structure).
+9. **Dashboard:** connect **Looker Studio** to your **mart** tables — [Looker Studio dashboard](#looker-studio-dashboard-nyc-tlc).
 
-*If the image does not render locally, add the PNG next to [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) or open that folder after export.*
+**Outside this path:** **GitHub Archive** ingestion, **Kestra-orchestrated** batch (alternative to the Python script), **streaming** (Flink/Grafana), and **tests/CI** — see [Optional tracks](#optional-github-archive-track) and [Going the extra mile](#going-the-extra-mile-optional).
+
+**Shortcuts:** root **`Makefile`** — `make help` (GNU Make: Git Bash / WSL / macOS / Linux). See [Going the extra mile](#going-the-extra-mile-optional).
+
+---
+
+## Prerequisites
+
+- **Python** 3.10+ (3.12–3.13 work well with these scripts)
+- **GCP:** project with **BigQuery** + **GCS**; **service account** JSON (see Terraform / GCP docs for roles)
+- **Docker Desktop** (or compatible engine + Compose) — **only if** you run **Kestra** (and streaming stack) locally via **`docker-compose.yml`** (flows that call `docker run` need the socket + custom image — [Kestra: Docker Compose](#kestra-docker-compose-local-ui))
+- **Tools** (install as needed): `gcloud` CLI (optional), **dbt** with BigQuery adapter, **Terraform**, **Kestra** (flows under `kestra/flows/`), `pip` deps for `scripts/` and the dbt project
+
+---
+
+## Repository root for commands
+
+Use **this folder** (the directory containing this README) as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this project lives inside a larger parent repo, use the path to **this** directory as the root. Publishing as its own repo: [Standalone repository & GitHub](#standalone-repository--github).
+
+---
+
+## Repository layout (where things live)
+
+| Location | Purpose |
+|----------|---------|
+| **`credentials/`** | **Local only:** **`gcp-service-account.json`** (GCP), **`local-dev-ui.env`** (Kestra/Grafana reminders — copy from **`local-dev-ui.env.example`**). Both gitignored; see **`credentials/README.md`**. |
+| **`terraform/`** | GCP infrastructure (IaC); default `var.credentials` points at **`../credentials/gcp-service-account.json`** when you run Terraform from **`terraform/`** |
+| **`scripts/`** | TLC ingest, GCS upload helpers, DuckDB → NDJSON export, **`upload_to_gcp.py`** (GitHub sample) |
+| **`scripts/streaming/`** | **`producer.py`** — Green taxi Parquet → Kafka/Redpanda (used by [streaming flow](#realtime-streaming-green-flink-postgres)) |
+| **`data/github/`** | GitHub Archive demo artifacts: **`github_test.duckdb`**, **`github_events_100.json`** (from dlt + export; see [Optional: GitHub Archive](#optional-github-archive-track)) |
+| **`data/raw/nyc_taxi/`** | TLC Parquet downloads (large; not committed) |
+| **`nyc_taxi_dbt/`** | dbt project (staging → core → mart) |
+| **`kestra/flows/batch/`**, **`kestra/flows/stream/`** | Orchestration YAML |
+| **`docs/`** | Diagrams, Looker exports, **`DOCKER_TROUBLESHOOT.md`**, [`POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md) |
+| **`dlt/`** | dlt pipeline for GitHub Archive → DuckDB |
+
+Unless a script’s docstring says otherwise, run commands from the **repository root**.
 
 ---
 
@@ -33,84 +78,16 @@ This repository demonstrates **end-to-end data pipelines on Google Cloud** acros
 
 | Track | Focus | Outcome |
 |-------|--------|---------|
-| **GitHub Archive** | **Ingestion & orchestration** (lake → warehouse patterns): DuckDB-based extraction, **GCS** as the data lake, **Kestra**-orchestrated loads into **BigQuery**, partitioning where the load defines it, and cloud-native patterns. | Breadth: orchestration, lake → warehouse. |
-| **NYC TLC Taxi (Yellow & Green)** | **Batch** ingestion of TLC Parquet (see `scripts/ingest_tlc_2019_2020.py`), **BigQuery** loads, **dbt** from **staging → core → mart**, **Looker Studio** on mart tables. | Depth: dimensional modeling, grain-aware marts, BI. |
+| **GitHub Archive** | **Ingestion & orchestration** (lake → warehouse): DuckDB-based extraction, **GCS** as the data lake, **Kestra**-orchestrated loads into **BigQuery**, partitioning where the load defines it | Breadth: orchestration, lake → warehouse |
+| **NYC TLC Taxi (Yellow & Green)** | **Batch** ingestion of TLC Parquet (`scripts/ingest_tlc_2019_2020.py`), **BigQuery** loads, **dbt** **staging → core → mart**, **Looker Studio** on mart tables | Depth: dimensional modeling, marts, BI |
 
-**Why GitHub Archive (this track):** [GitHub Archive](https://www.gharchive.org/) provides **hourly public JSON event streams** (repository activity over time), which fits **time-oriented ingestion**, **lake → BigQuery** loads, and orchestration practice. This repository uses a **small, reproducible sample** (`github_events_100`)—not a full historical crawl—so cloud runs stay cheap and reviewable.
+**Why GitHub Archive:** [GitHub Archive](https://www.gharchive.org/) provides hourly public JSON event streams. This repo uses a **small sample** (`github_events_100`) — not a full historical crawl — so cloud runs stay cheap and reviewable.
 
-Together, these tracks show **lake → warehouse → transformation → dashboard**—a standard analytics-engineering scope (pipeline + warehouse SQL + dashboard).
+Together, these tracks show **lake → warehouse → transformation → dashboard**.
 
-**NYC TLC — Looker Studio exports (PDF / PNG):** Static copies of the dashboard are in **`docs/nyc-taxi-looker-analytics/`** — see [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) for `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).pdf` and `.png`.
+**NYC TLC — Looker exports (PDF / PNG):** [`docs/nyc-taxi-looker-analytics/`](docs/nyc-taxi-looker-analytics/README.md).
 
-> **Why two domains?** One track is **ingest/orchestration** (GitHub Archive → lake → BigQuery); the other is **modeling + BI** (NYC taxi → dbt → Looker). Showing **two subject areas** on purpose avoids a portfolio that reads as **only one business domain** (for example, taxi analytics alone). Together they make **breadth** (orchestration, lake patterns) and **depth** (dimensional models, marts) visible in one repository.
-
-**Repository root for commands:** use **this folder** as the working directory for Terraform, dbt, and Python. For a **standalone Git clone**, that is the **clone root**. If this project is nested inside a larger parent repo, use the path to **this** directory as the root. See [Standalone repository & GitHub](#standalone-repository--github).
-
-### Prerequisites
-
-- **Python** 3.10+ (3.12–3.13 are commonly used and work well with these scripts)
-- **GCP**: project with **BigQuery** + **GCS** enabled; **service account** JSON with appropriate roles (see Terraform / GCP docs)
-- **Docker Desktop** (or another Docker engine with Compose) — **only if** you run **Kestra** locally via `docker-compose.yml` (flows that call `docker run` need the socket + custom image; see [Kestra: Docker Compose](#kestra-docker-compose-local-ui)).
-- **Tools** (install as needed): `gcloud` CLI (optional), **dbt** with BigQuery adapter, **Terraform**, **Kestra** (orchestration flows in `kestra/flows/`), `pip install` deps in `scripts`/dbt project
-
----
-
-## Tech stack
-
-- **Cloud**: Google Cloud Platform (GCP)
-- **Infrastructure as Code (IaC)**: Terraform
-- **Workflow orchestration**: Kestra
-- **Data lake**: Google Cloud Storage (GCS)
-- **Data warehouse**: BigQuery (partitioned / clustered where applicable)
-- **Batch processing (TLC)**: Python, **PyArrow** (Parquet merge / schema unify before BigQuery load)
-- **Transformation**: dbt (Data Build Tool)
-- **Visualization**: Looker Studio — reports on **dbt** mart tables ([dashboard section](#looker-studio-dashboard-nyc-tlc)); archived **PDF/PNG** exports: [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md). SQL validation in BigQuery remains the primary **QA** for grain and totals.
-
----
-
-## Architecture (high level)
-
-**GitHub Archive path** (scripts in-repo: `dlt/github_archive_ingestion.py` → DuckDB; `scripts/export_duckdb_to_json.py` → NDJSON; `upload_to_gcp.py` → GCS/BigQuery)
-
-1. **Extract** — Load [GitHub Archive](https://www.gharchive.org/) hourly JSON into **DuckDB** (via **dlt**), then export a sample to **NDJSON** for cloud load.
-2. **Load (GCS)** — Land files in the **data lake** bucket.
-3. **Load (BigQuery)** — Load NDJSON into BigQuery (`upload_to_gcp.py`); **partitioning** depends on the load job you use (sample path may use autodetect; **Kestra** flows in `kestra/flows/` can build **partitioned** tables explicitly).
-4. **Transform** — dbt models (where this track defines them).
-5. **Consume** — BigQuery SQL / downstream tools.
-
-> **`github_events_100`:** **100 rows** from [one hourly GitHub Archive file](https://www.gharchive.org/)—**demo / test scale**, not a full archive load.
-
-**NYC TLC path**
-
-1. **Extract** — Download monthly **Yellow/Green** Parquet from TLC (`ingest_tlc_2019_2020.py`).
-2. **Transform (local)** — Merge monthly files with **PyArrow** (schema drift / timestamp coercion) → single Parquet per color.
-3. **Load (GCS)** — Upload merged Parquet to a **lake** prefix.
-4. **Load (BigQuery)** — `LOAD` into the TLC dataset (default name **`trips_data_all`**; override with env **`BQ_DATASET`** in `scripts/ingest_tlc_2019_2020.py` if yours differs).
-5. **Transform** — `nyc_taxi_dbt`: **staging → core → mart**.
-6. **Visualize** — Looker Studio → marts in **your** dbt output dataset (see **`YOUR_DATASET`** / `profiles.yml`).
-
-```mermaid
-flowchart LR
-  subgraph gh["GitHub track"]
-    D[DuckDB / scripts] --> G[GCS]
-    G --> BQ1[(BigQuery)]
-  end
-  subgraph nyc["NYC TLC track"]
-    P[Python + PyArrow] --> G2[GCS]
-    G2 --> BQ2[(BigQuery staging)]
-    BQ2 --> DBT[dbt]
-    DBT --> LS[Looker Studio]
-  end
-```
-
----
-
-## Current scope (this repo)
-
-| Status | Scope |
-|--------|--------|
-| **Done** | GitHub-oriented **ingestion** assets (DuckDB / GCS / Kestra / BigQuery) as documented; **NYC** batch ingest script, **dbt** (`nyc_taxi_dbt`) through **staging → core → mart**, including **`dm_monthly_zone_revenue`**, **`dm_citywide_monthly`**, **`dm_service_type_totals`**; **Looker Studio** (≥2 tiles: categorical + temporal). |
-| **Optional** | Extend TLC date range, streaming, or extra charts — beyond the baseline documented here. |
+> **Why two domains?** One track is **ingest/orchestration** (GitHub → lake → BigQuery); the other is **modeling + BI** (taxi → dbt → Looker). Together they show **breadth** and **depth** in one repository.
 
 ---
 
@@ -118,15 +95,20 @@ flowchart LR
 
 | Step | What | How (summary) |
 |------|------|----------------|
-| 1. Infra | GCS bucket, BigQuery datasets, IAM | `terraform init` → `plan` → `apply` (see [Configuration](#configuration-gcp-and-kestra)) |
-| 2. Orchestration (GitHub path) | GCS → BigQuery | Kestra flows after KV is set |
-| 2b. NYC TLC pipeline (main batch path for taxi) | Parquet → merge → GCS → BigQuery | `python scripts/ingest_tlc_2019_2020.py` (see script docstring). **Alternative:** **`kestra/flows/nyc_taxi_ingest_pipeline.yaml`** (download → upload → BigQuery as one flow) or the split flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery*.yaml`)—see [Kestra: Docker Compose (local UI)](#kestra-docker-compose-local-ui). |
+| 1. Infra | GCS bucket, BigQuery datasets, IAM | `terraform init` → `plan` → `apply` — [Terraform](#terraform), [Configuration](#configuration-gcp-and-kestra) |
+| 2. Orchestration (GitHub path) | GCS → BigQuery | Kestra flows after KV is set — [Optional: GitHub Archive](#optional-github-archive-track) |
+| 2b. NYC TLC pipeline (main batch path for taxi) | Parquet → merge → GCS → BigQuery | `python scripts/ingest_tlc_2019_2020.py` — **Alternative:** `kestra/flows/batch/nyc_taxi_ingest_pipeline.yaml` or split flows — [Kestra: Docker Compose](#kestra-docker-compose-local-ui), [Ingest](#ingest-nyc-tlc) |
 | 3. Transformation | dbt | `cd nyc_taxi_dbt` → `dbt seed` → `dbt run` |
-| 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` |
+| 4. BI | Looker Studio | BigQuery connector → **your** project + **dbt** dataset from `profiles.yml` — [Looker](#looker-studio-dashboard-nyc-tlc) |
+| 5. (Optional) Real-time | Redpanda → Flink → Postgres → Grafana | [Real-time streaming](#realtime-streaming-green-flink-postgres) |
 
-**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility on any laptop. The **same logical pipeline** (extract → Parquet merge → GCS lake → BigQuery load with partitioning/clustering) is **also implemented as Kestra flows** under `kestra/flows/`: an **end-to-end** flow **`nyc_taxi_ingest_pipeline.yaml`** (three stages in a `Sequential` task), plus **split** flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). For expectations around **orchestrated batch loads to the data lake**, treat **either** the Kestra flows **or** the script as the automation story—the script is the all-in-one runner; Kestra is the **workflow-orchestrated** equivalent.
+**Batch orchestration (Kestra vs. Python script):** The TLC path is documented with a **single Python entrypoint** for reproducibility. The **same logical pipeline** is **also** implemented as Kestra flows under `kestra/flows/batch/`: **`nyc_taxi_ingest_pipeline.yaml`** (sequential stages), plus split flows (`nyc_taxi_to_gcs_optimized.yaml`, `gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml`). Use **either** the script or Kestra as your automation story.
 
-**Terraform** (from a machine with credentials — **do not commit** JSON keys):
+---
+
+## Terraform
+
+From a machine with credentials — **do not commit** JSON keys:
 
 ```bash
 cd terraform
@@ -135,48 +117,28 @@ terraform plan
 terraform apply
 ```
 
-**dbt**
-
-```bash
-cd nyc_taxi_dbt
-dbt seed
-dbt run
-```
-
-**Looker Studio** — Add BigQuery data sources for mart tables; see [Looker Studio dashboard (NYC TLC)](#looker-studio-dashboard-nyc-tlc).
+Defaults in `terraform/variables.tf` are **placeholders** (`your-gcp-project-id`, `your-gcs-bucket-name`); override with **`terraform.tfvars`** (gitignored) or `-var` flags before a real `apply`. Renaming the bucket may **create** a new bucket; clean up old resources if needed.
 
 ---
 
-## Looker Studio dashboard (NYC TLC)
+## Ingest (NYC TLC)
 
-**Suggested dashboard baseline:** **at least two tiles**—one chart for **categorical distribution**, one for **distribution over time**, with clear titles.
+**Script:** `scripts/ingest_tlc_2019_2020.py` — download monthly **Yellow/Green** Parquet (TLC), merge with **PyArrow**, upload to **GCS**, **LOAD** into BigQuery (default dataset **`trips_data_all`**; override with **`BQ_DATASET`**).
 
-### Report content (example)
+**Official patterns:** `https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_YYYY-MM.parquet` (and green).
 
-| Element | Description |
-|---------|-------------|
-| **Report title** | e.g. `NYC Taxi Data Pipeline Analytics (2019–2020)` |
-| **Tile 1 (categorical)** | Donut / pie — `service_type` vs **`trip_total`** from **`dm_service_type_totals`**, or `SUM(total_monthly_trips)` from **`dm_monthly_zone_revenue`** with correct aggregation. |
-| **Tile 2 (temporal)** | Stacked bar — month on X-axis, year (e.g. 2019 vs 2020) as breakdown; **`total_monthly_trips`** (summed across zones) or **`dm_citywide_monthly.trips`**. |
-| **Filters** | Date range on `revenue_month` (2019-01-01 — 2020-12-31); optional `service_type`. |
+**BigQuery output tables (typical):** `yellow_tripdata_2019_2020`, `green_tripdata_2019_2020` in dataset **`trips_data_all`** (see script docstring).
 
-**Note:** If Looker errors on `SUM` for pre-aggregated fields, use **`dm_service_type_totals`** for the pie (`trip_total` without an extra `SUM`) and **`dm_citywide_monthly`** for time series, or calculated fields `EXTRACT(MONTH FROM revenue_month)` / `EXTRACT(YEAR FROM revenue_month)`.
+**After load:** `cd nyc_taxi_dbt && dbt seed && dbt run`.
 
-### Dashboard artifacts (exported)
-
-Static exports of the Looker report are stored under **`docs/nyc-taxi-looker-analytics/`** (see **`docs/nyc-taxi-looker-analytics/README.md`**):
-
-| File | Description |
-|------|-------------|
-| `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).pdf` | PDF export of the dashboard |
-| `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png` | PNG image (screenshot or export) |
+**Environment:** `GCP_PROJECT_ID`, `GCS_BUCKET`, `BQ_DATASET`, `GCP_CREDS_PATH` — [Environment variables](#environment-variables-python-upload--ingest).
 
 ### TLC ingest scope: why 2019–2020?
 
-The batch script loads **NYC TLC Yellow and Green** Parquet for **2019-01 through 2020-12** (`scripts/ingest_tlc_2019_2020.py`).
+The batch script loads **2019-01 through 2020-12** (`scripts/ingest_tlc_2019_2020.py`).
 
-- **Primary:** **Reproducible** public monthly files; **two full calendar years** for YoY and seasonality, including **COVID-19** effects in **2020**.
-- **Secondary:** Lower **download size**, **merge memory**, and **load** time than ingesting all historical months—sensible for a portfolio without changing the narrative.
+- **Primary:** Reproducible public monthly files; **two full calendar years** for YoY and **COVID-19** effects in **2020**
+- **Secondary:** Smaller download / merge / load than full history — sensible for a portfolio
 
 ---
 
@@ -194,15 +156,13 @@ The dbt project is **`nyc_taxi_dbt/`** (NYC Yellow & Green taxi analytics). It f
 
 ### BigQuery optimization (partitioning, clustering, marts)
 
-The following summarizes how warehouse tables are tuned for typical queries, with a short **how/why** below.
-
 | Layer | What we do | Why |
 |-------|----------------|-----|
-| **Raw trip tables** (from `scripts/ingest_tlc_2019_2020.py`) | **Daily** time partitioning on **`tpep_pickup_datetime`** (Yellow) and **`lpep_pickup_datetime`** (Green); **clustering** on **`VendorID`**, **`PULocationID`** | Time filters (date ranges, months) prune partitions; vendor/zone predicates align with clustering. Implemented in the load job (`TimePartitioning` + `clustering_fields`). |
-| **Alternative path** | `kestra/flows/gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml` | Build **partitioned + clustered** tables from GCS via SQL (`CREATE OR REPLACE … AS SELECT`) — same design intent, orchestrated in Kestra. |
-| **dbt marts** | `core/` and `mart/` models materialized as **tables** where needed (see `dbt_project.yml`) | Pre-aggregated **month × zone × service_type** (and related) grains for **Looker Studio** — smaller, faster scans than raw fact for dashboard tiles. |
+| **Raw trip tables** (from `scripts/ingest_tlc_2019_2020.py`) | **Daily** time partitioning on **`tpep_pickup_datetime`** (Yellow) and **`lpep_pickup_datetime`** (Green); **clustering** on **`VendorID`**, **`PULocationID`** | Time filters prune partitions; vendor/zone predicates align with clustering (`TimePartitioning` + `clustering_fields`) |
+| **Alternative path** | `kestra/flows/batch/gcs_to_bigquery.yaml`, `gcs_to_bigquery_green.yaml` | Partitioned + clustered tables from GCS via SQL — orchestrated in Kestra |
+| **dbt marts** | `core/` and `mart/` materialized as **tables** where needed (`dbt_project.yml`) | Pre-aggregated grains for **Looker Studio** |
 
-After a successful load, you can confirm layout in BigQuery UI (**Table details** → partitioning & clustering) or query `INFORMATION_SCHEMA.TABLE_OPTIONS` / `INFORMATION_SCHEMA.COLUMNS` for the staging dataset.
+Confirm layout in BigQuery UI (**Table details**) or `INFORMATION_SCHEMA`.
 
 ```text
 nyc_taxi_dbt/
@@ -230,9 +190,9 @@ Mart logic should be verified in **BigQuery** (grain, `SUM` across zones). **Loo
 
 **Grain:** `dm_monthly_zone_revenue` has one row per **(pickup zone × calendar month × service type)**. City-wide totals require **`SUM(...) GROUP BY revenue_month, service_type`**.
 
-Replace `` `YOUR_GCP_PROJECT` `` and `` `YOUR_DATASET` `` with the **project** and **dataset** from your **`profiles.yml`** (placeholders below — use whatever names you configured).
+Replace `` `YOUR_GCP_PROJECT` `` and `` `YOUR_DATASET` `` with values from **`profiles.yml`**.
 
-**Fully qualified example pattern:** `` `YOUR_GCP_PROJECT.YOUR_DATASET.dm_monthly_zone_revenue` ``
+**Fully qualified example:** `` `YOUR_GCP_PROJECT.YOUR_DATASET.dm_monthly_zone_revenue` ``
 
 ### 1. Monthly trip totals (city-wide roll-up)
 
@@ -261,13 +221,41 @@ LIMIT 5;
 
 ---
 
+## Looker Studio dashboard (NYC TLC)
+
+**Baseline:** **at least two tiles** — one **categorical** chart, one **time** chart, with clear titles.
+
+### Report content (example)
+
+| Element | Description |
+|---------|-------------|
+| **Report title** | e.g. `NYC Taxi Data Pipeline Analytics (2019–2020)` |
+| **Tile 1 (categorical)** | Donut / pie — `service_type` vs **`trip_total`** from **`dm_service_type_totals`**, or `SUM(total_monthly_trips)` from **`dm_monthly_zone_revenue`** with correct aggregation |
+| **Tile 2 (temporal)** | Stacked bar — month on X-axis, year (2019 vs 2020) as breakdown; **`dm_citywide_monthly.trips`** or related |
+| **Filters** | Date range on `revenue_month` (2019-01-01 — 2020-12-31); optional `service_type` |
+
+**Storyline:** Compare **2019 vs 2020** for **YoY** and **COVID-19** impacts. Layout: **donut** (share by `service_type`) + **stacked bar** (months × year).
+
+**Note:** If Looker errors on `SUM` for pre-aggregated fields, use **`dm_service_type_totals`** for the pie and **`dm_citywide_monthly`** for time series, or `EXTRACT(MONTH/YEAR FROM revenue_month)`.
+
+### Dashboard artifacts (exported)
+
+| File | Description |
+|------|-------------|
+| `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).pdf` | PDF export |
+| `NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png` | PNG |
+
+Location: **`docs/nyc-taxi-looker-analytics/`** — see [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md).
+
+---
+
 ## Configuration (GCP and Kestra)
 
-> **Public / shared repositories:** Use **your own** project id, bucket name, and dataset names. Do **not** commit service account JSON. The keys below describe **what to configure**, not secret values.
+> **Public repos:** Use **your own** project id, bucket, and dataset names. Do **not** commit service account JSON.
 
 ### GCS bucket
 
-- Set a **globally unique** bucket name in **Terraform**, any **upload scripts**, and **Kestra KV** (`GCP_BUCKET`) so all three match.
+- Set a **globally unique** bucket name in **Terraform**, **upload scripts**, and **Kestra KV** (`GCP_BUCKET`) so all three match.
 - In docs, substitute **`YOUR_GCS_BUCKET`** for your real name.
 
 ### Environment variables (Python upload / ingest)
@@ -276,11 +264,11 @@ Scripts default to README placeholders (`YOUR_GCP_PROJECT`, `YOUR_GCS_BUCKET`). 
 
 | Variable | Scripts | Purpose |
 |----------|---------|---------|
-| `GCP_PROJECT_ID` | `scripts/ingest_tlc_2019_2020.py`, `upload_to_gcp.py` | GCP project id |
-| `GCS_BUCKET` | `ingest_tlc_2019_2020.py`, `upload_to_gcp.py`, `scripts/upload_green_parquet_to_gcs.py` | Lake bucket (matches Terraform + Kestra KV) |
-| `BQ_DATASET` | `ingest_tlc_2019_2020.py` | BigQuery dataset for TLC tables (default `trips_data_all`) |
-| `BQ_DATASET_GITHUB`, `BQ_TABLE_GITHUB_EVENTS` | `upload_to_gcp.py` | GitHub Archive dataset / table id (defaults: `github_archive_data`, `github_events_100`) |
-| `GCP_CREDS_PATH` | ingest / upload helpers | Service account JSON path (default: `terraform/gcp-creds.json` next to this repo root) |
+| `GCP_PROJECT_ID` | `scripts/ingest_tlc_2019_2020.py`, `scripts/upload_to_gcp.py` | GCP project id |
+| `GCS_BUCKET` | `scripts/ingest_tlc_2019_2020.py`, `scripts/upload_to_gcp.py`, `scripts/upload_green_parquet_to_gcs.py` | Lake bucket (matches Terraform + Kestra KV) |
+| `BQ_DATASET` | `scripts/ingest_tlc_2019_2020.py` | BigQuery dataset for TLC tables (default `trips_data_all`) |
+| `BQ_DATASET_GITHUB`, `BQ_TABLE_GITHUB_EVENTS` | `scripts/upload_to_gcp.py` | GitHub Archive dataset / table (defaults: `github_archive_data`, `github_events_100`) |
+| `GCP_CREDS_PATH` | ingest / upload helpers | Service account JSON path (default: **`credentials/gcp-service-account.json`**) |
 
 ### Kestra KV (namespace `system`)
 
@@ -288,75 +276,253 @@ Scripts default to README placeholders (`YOUR_GCP_PROJECT`, `YOUR_GCS_BUCKET`). 
 
 | Key | Value |
 |-----|--------|
-| `GCP_BUCKET` | **`YOUR_GCS_BUCKET`** (no leading/trailing spaces). |
-| `GCP_CREDS` | Full JSON of the service account used for GCS/BigQuery (same as the JSON you use locally for Terraform — **never commit this file**). |
+| `GCP_BUCKET` | **`YOUR_GCS_BUCKET`** (no leading/trailing spaces) |
+| `GCP_CREDS` | Full JSON of the service account for GCS/BigQuery — **never commit** |
 
 Flows use `{{ kv('GCP_BUCKET') }}` and `{{ kv('GCP_CREDS') }}`; values are **not** in the repo.
 
-**REST API (optional):** Open-source Kestra exposes KV under `/api/v1/main/namespaces/<namespace>/kv/<key>`. Many builds expect **`Content-Type: text/plain`**. For **`GCP_BUCKET`**, if the name contains **hyphens**, send a **JSON string** body (e.g. `"my-project-bucket"`) so the value is not truncated. **`GCP_CREDS`**: PUT the **raw JSON file contents** as `text/plain`. Use Basic Auth if enabled (see Docker Compose below).
+**REST API (optional):** `/api/v1/main/namespaces/<namespace>/kv/<key>`. Many builds expect **`Content-Type: text/plain`**. For **`GCP_BUCKET`** with **hyphens**, send a **JSON string** body (e.g. `"my-project-bucket"`). **`GCP_CREDS`**: PUT **raw JSON** as `text/plain`. Use Basic Auth if enabled.
 
 ### Kestra: Docker Compose (local UI)
 
-Run the orchestrator **locally** from the **repository root** (the same folder as this README).
+Run from the **repository root**.
 
 | Item | Detail |
 |------|--------|
-| **Compose file** | `docker-compose.yml` — **Kestra** + **PostgreSQL** (flows and executions persist across restarts). |
-| **Custom image** | `Dockerfile.kestra` extends `kestra/kestra:latest` with the **`docker` CLI**. Mounting **`/var/run/docker.sock`** alone is not enough: flows that call `docker run` need the client binary inside the Kestra container. |
-| **Repo mount** | The project is mounted at **`/workspace`** inside Kestra so flows and scripts see the same tree as on the host. |
-| **Credentials file** | `./terraform/gcp-creds.json` is mounted for Kestra; keep that path valid (or adjust the compose file). **Do not commit** the JSON. |
-| **Web UI** | [http://localhost:8080](http://localhost:8080) — basic-auth defaults are in `docker-compose.yml` (`admin@company.com` / `StrongPass1`). **Change these for anything beyond local dev.** |
-| **First-time / after Dockerfile changes** | `docker compose build kestra` then `docker compose up -d`. |
+| **Compose file** | `docker-compose.yml` — **Kestra** + **PostgreSQL** + **Redpanda** + **Flink** + **Grafana** |
+| **Custom image** | `Dockerfile.kestra` — **`docker` CLI** inside the image for flows that call `docker run` |
+| **Repo mount** | Project at **`/workspace`** inside Kestra |
+| **Credentials** | `./credentials/gcp-service-account.json` → `/app/gcp-service-account.json` in Kestra; **`GOOGLE_APPLICATION_CREDENTIALS`** set in Compose — **do not commit** the JSON |
+| **Ports (host)** | **Kestra** [http://localhost:8090](http://localhost:8090); **Flink** [http://localhost:9081](http://localhost:9081); **Redpanda** **9092** / **29092** (Docker network); **Grafana** [http://localhost:3000](http://localhost:3000) |
+| **Web UI auth** | Kestra: `admin@company.com` / `StrongPass1` (defaults in compose). Grafana: **`admin` / `admin`** |
+| **First-time / Dockerfile changes** | `docker compose build kestra` then `docker compose up -d` |
 
 **Flow `nyc_taxi_ingest_pipeline` (TLC batch):**
 
-1. **Register** the YAML: paste into the UI or `PUT`/`POST` to `/api/v1/main/flows` (see [Kestra API](https://kestra.io/docs/how-to-guides/api)).
-2. Set **`variables.workspace_host`** in `kestra/flows/nyc_taxi_ingest_pipeline.yaml` to the **absolute host path of this repo** (Docker Desktop on Windows: forward slashes, e.g. `E:/IT_SPACES/AI/Projects/nyc-taxi-pipeline-analytics`). Nested `docker run -v` uses the **host** path, not `/workspace` inside Kestra, so this must match where you cloned the project.
-3. Ensure KV keys **`GCP_BUCKET`** and **`GCP_CREDS`** exist (namespace **`system`**).
-4. **Execute** with **narrow inputs** first (e.g. `start` = `end` = `2020-12`) to limit cost and runtime. Default inputs in the flow are **2019-01**–**2020-12** (full two-year range).
+1. **Register** the YAML (UI or [Kestra API](https://kestra.io/docs/how-to-guides/api)).
+2. Set **`variables.workspace_host`** in `kestra/flows/batch/nyc_taxi_ingest_pipeline.yaml` to the **absolute host path** of this repo (Windows Docker: forward slashes, e.g. `E:/path/to/nyc-taxi-pipeline-analytics`). Nested `docker run -v` uses the **host** path.
+3. KV keys **`GCP_BUCKET`** and **`GCP_CREDS`** (namespace **`system`**).
+4. **Execute** with narrow inputs first (e.g. `start` = `end` = `2020-12`). Defaults: **2019-01**–**2020-12**.
 
-**Important:** The **merge / upload** logic in `scripts/ingest_tlc_2019_2020.py` can consider **all** Parquet under `data/raw/nyc_taxi/` depending on stage. For a **true one-month** test, start with an empty or clean `data/raw` tree for that run, or only the months you intend—see script and flow comments.
+**Important:** Ingest merge logic may consider **all** Parquet under `data/raw/nyc_taxi/` — for a **one-month** test, use a clean `data/raw` tree or only intended months.
 
-**Runtime (what “slow” looks like):** `tlc_upload` and `tlc_bigquery` often run for **many minutes** each (Parquet merge, GCS upload, BigQuery `LOAD`). A nested `python:3.12-slim` container visible in `docker ps` for **tens of minutes** is **usually normal** while Kestra shows the task as `RUNNING`—not necessarily stuck.
+**Runtime:** `tlc_upload` / `tlc_bigquery` can run **many minutes**; a nested `python:3.12-slim` container for **tens of minutes** is often **normal**.
 
-**After SUCCESS:** In the UI, confirm **`tlc_download` → `tlc_upload` → `tlc_bigquery`** are all green. In **BigQuery**, check your TLC dataset (default **`trips_data_all`**) for the expected Yellow/Green tables. Then run **dbt** against those sources (`cd nyc_taxi_dbt` → `dbt seed` / `dbt run` as needed).
-
-### Terraform
-
-Same commands as in [End-to-end workflow (execution order)](#end-to-end-workflow-execution-order) (`cd terraform` → `init` / `plan` / `apply`). Defaults in `terraform/variables.tf` are **placeholders** (`your-gcp-project-id`, `your-gcs-bucket-name`); override with **`terraform.tfvars`** (gitignored) or `-var` flags before a real `apply`. Renaming the bucket may **create** a new bucket; clean up old resources if needed.
+**After SUCCESS:** Confirm **`tlc_download` → `tlc_upload` → `tlc_bigquery`** in Kestra; verify **BigQuery** dataset (default **`trips_data_all`**); then **dbt** (`cd nyc_taxi_dbt` → `dbt seed` / `dbt run`).
 
 ### Security
 
-- Do **not** commit `gcp-creds.json`, `.env`, or any secret JSON.
-- Use `.gitignore` for local credentials; prefer **Kestra KV** or **Secret Manager** in production.
+- Do **not** commit `credentials/gcp-service-account.json`, `credentials/local-dev-ui.env`, `.env`, or other secret JSON.
+- Use `.gitignore`; prefer **Kestra KV** or **Secret Manager** in production.
+
+---
+
+## Optional: GitHub Archive track
+
+**Path (scripts):** `dlt/github_archive_ingestion.py` → **`data/github/github_test.duckdb`**; `scripts/export_duckdb_to_json.py` → **`data/github/github_events_100.json`**; `scripts/upload_to_gcp.py` → GCS/BigQuery.
+
+1. **Extract** — [GitHub Archive](https://www.gharchive.org/) hourly JSON into **DuckDB** (via **dlt**), export sample **NDJSON**.
+2. **Load (GCS)** — Lake bucket.
+3. **Load (BigQuery)** — `scripts/upload_to_gcp.py`; **Kestra** flows in `kestra/flows/batch/` can build **partitioned** tables.
+4. **Transform / consume** — dbt where defined; BigQuery SQL.
+
+> **`github_events_100`:** **100 rows** from one hourly file — **demo scale**, not a full crawl.
+
+---
+
+<h2 id="realtime-streaming-green-flink-postgres">Optional: Real-time streaming (Green → Redpanda → Flink → Postgres → Grafana)</h2>
+
+**Local Docker Compose only** — does **not** replace **BigQuery + dbt + Looker**. **Looker** = **2019 vs 2020** narrative on **marts**; **Grafana** = **near–real-time** **`trip_stats_realtime`** (ops-style).
+
+| Piece | Where / notes |
+|-------|---------------|
+| **Broker** | **Redpanda** — Docker: **`redpanda:29092`**; host: **`localhost:9092`** |
+| **Orchestration** | **`nyc_taxi_realtime_ingest`** (`kestra/flows/stream/nyc_taxi_realtime_ingest.yaml`): **`scripts/streaming/producer.py`** via nested Docker; **`variables.workspace_host`**; **`kafka_bootstrap`** default **`redpanda:29092`** |
+| **Flink** | **`flink-jobmanager`** / **`flink-taskmanager`**; copy SQL under `scripts/sql/` into the container, then e.g. `docker compose exec -T flink-jobmanager /opt/flink/bin/sql-client.sh embedded -f /tmp/….sql` |
+| **JDBC** | **`flink-connector-jdbc`** (Flink **1.18**) + PostgreSQL JDBC in **`flink-libs/`** (gitignored). Helper: **`scripts/download_flink_jdbc_jars.ps1`**. Restart Flink after adding JARs |
+| **Postgres sink** | DB **`kestra`**, user **`kestra`**, password **`k3str4`**. Table **`trip_stats_realtime`**: **`scripts/sql/postgres_trip_stats_realtime.sql`** |
+| **Flink SQL** | **`scripts/sql/flink_green_taxi_topic_to_pg.sql`** — topic **`taxi-topic`**, **5-minute** `TUMBLE`, sink → **`trip_stats_realtime`** |
+| **Job lifecycle** | **`flink list`** → **`flink cancel <JOB_ID>`** before DDL changes |
+
+**Quick verify:**
+
+```bash
+docker compose exec postgres psql -U kestra -d kestra -c "SELECT * FROM trip_stats_realtime ORDER BY window_start DESC LIMIT 15;"
+```
+
+**Grafana:** [http://localhost:3000](http://localhost:3000) — PostgreSQL data source: host **`postgres`**, port **5432**, database **`kestra`**, user **`kestra`**, password **`k3str4`**, TLS off.
+
+**Bar chart (SQL example):**
+
+```sql
+SELECT sub.label, sub.trip_count
+FROM (
+  SELECT
+    CONCAT('Vendor ', vendor_id::text, ' (', to_char(window_start, 'HH24:MI'), ')') AS label,
+    trip_count,
+    window_start,
+    vendor_id
+  FROM trip_stats_realtime
+  ORDER BY window_start DESC, vendor_id
+  LIMIT 10
+) sub
+ORDER BY sub.window_start ASC, sub.vendor_id;
+```
+
+Example panel title: **Real-time Vendor Activity**.
+
+![Grafana — Real-time Vendor Activity (Postgres trip_stats_realtime, local Compose)](docs/grafana_trip_stats_realtime_bar_chart.png)
+
+*Flink window aggregates in **`trip_stats_realtime`**; Grafana uses Compose Postgres.*
+
+**Optional:** `docker logs --tail 100 <flink-taskmanager-container>`. Reference Kafka DDL: **`flink-sql/create_taxi_trips_kafka.sql`**.
+
+---
+
+## Going the extra mile (optional)
+
+Not required for the core pipeline; useful for portfolio review.
+
+| Area | What’s in this repo |
+|------|---------------------|
+| **Makefile** | **`Makefile`**: `make help` — `make dbt-test`, `make dbt-all`, `make pytest`, `make lint`, `make readme-anchors`, `make docker-config`. Requires **GNU Make** (or run commands manually on Windows) |
+| **dbt tests** | **`nyc_taxi_dbt/models/schema.yml`**, **`seeds/schema.yml`**, **`nyc_taxi_dbt/tests/`** — run `dbt test` (needs BigQuery + `profiles.yml`) |
+| **Python unit tests** | **`tests/`** — `pip install -r requirements-dev.txt`; `pytest tests` or `make pytest` |
+| **CI** | **`.github/workflows/ci.yml`** — ruff, `compileall`, pytest, README TOC anchor check (`scripts/verify_readme_anchors.py`), `docker compose config` — **no** Terraform apply or dbt against BigQuery in CI |
+
+---
+
+## Story at a glance (NYC TLC track)
+
+Think of this pipeline as a **taxi dispatch office** turning public trip records into decisions people can see:
+
+| Step | What happens | Tools (in this repo) |
+|------|----------------|----------------------|
+| 🚚 **Ingestion** | NYC TLC monthly Parquet → normalize for the cloud | Python, PyArrow (`scripts/ingest_tlc_2019_2020.py`); optional **Kestra** (`kestra/flows/`) |
+| 🏠 **Lake & warehouse** | **GCS** → **BigQuery** with **partitioning** and **clustering** | GCS → BigQuery loads |
+| 🍳 **Transformation** | **staging → core → mart** | **dbt** (`nyc_taxi_dbt/`) |
+| 📊 **Visualization** | Marts → **Looker Studio** (e.g. **2019 vs 2020**) | Looker on mart tables |
+
+**Pipeline (conceptual):**
+
+![NYC TLC pipeline (conceptual)](docs/nyc-tlc-pipeline-architecture.png)
+
+*Diagram updates: [`docs/image-and-diagram-guidelines.md`](docs/image-and-diagram-guidelines.md).*
+
+**Dashboard (static export):**
+
+![NYC Taxi Data Pipeline Analytics (2019–2020) — Looker Studio](docs/nyc-taxi-looker-analytics/NYC_Taxi_Data_Pipeline_Analytics_(2019–2020).png)
+
+*If the image does not render, add the PNG per [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md).*
+
+---
+
+## Tech stack
+
+- **Cloud**: Google Cloud Platform (GCP)
+- **IaC**: Terraform
+- **Orchestration**: Kestra
+- **Lake**: Google Cloud Storage (GCS)
+- **Warehouse**: BigQuery (partitioned / clustered where applicable)
+- **Batch (TLC)**: Python, **PyArrow**
+- **Transformation**: dbt
+- **Visualization**: Looker Studio — marts; exports: [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md)
+- **Streaming (local, optional)**: Redpanda, **Flink** → **PostgreSQL**, **Grafana** on **`trip_stats_realtime`** — [Real-time streaming](#realtime-streaming-green-flink-postgres)
+
+---
+
+## Architecture (high level)
+
+**GitHub Archive path** — see [Optional: GitHub Archive](#optional-github-archive-track).
+
+**NYC TLC path**
+
+1. **Extract** — Monthly Yellow/Green Parquet (`scripts/ingest_tlc_2019_2020.py`).
+2. **Transform (local)** — **PyArrow** merge → one Parquet per color.
+3. **Load (GCS)** — Lake prefix.
+4. **Load (BigQuery)** — `LOAD` into **`trips_data_all`** (or `BQ_DATASET`).
+5. **Transform** — `nyc_taxi_dbt`: **staging → core → mart**.
+6. **Visualize** — Looker Studio.
+
+**NYC TLC — real-time (optional):** Green rows → **`taxi-topic`** → **Flink** → **`trip_stats_realtime`** → **Grafana** — [Real-time streaming](#realtime-streaming-green-flink-postgres).
+
+```mermaid
+flowchart TD
+  subgraph gh["GitHub Archive track"]
+    D[DuckDB / scripts] --> G[GCS]
+    G --> BQ1[(BigQuery)]
+  end
+
+  subgraph nyc_batch["NYC TLC — Batch (Google Cloud)"]
+    P[Python + PyArrow] --> G2[GCS lake]
+    G2 --> BQ2[(BigQuery staging)]
+    BQ2 --> DBT[dbt]
+    DBT --> LS[Looker Studio]
+  end
+
+  subgraph nyc_stream["NYC TLC — Real-time (Compose: Redpanda / Flink / Grafana)"]
+    K[Kestra + streaming producer] --> RP[Redpanda]
+    RP --> FL[Apache Flink]
+    FL --> PG[(PostgreSQL)]
+    PG --> GR[Grafana]
+  end
+
+  TLC[(NYC TLC trip data)]
+  TLC -->|batch: Yellow & Green Parquet| P
+  TLC -->|stream: Green rows| K
+```
+
+---
+
+## Current scope (this repo)
+
+| Status | Scope |
+|--------|--------|
+| **Done** | GitHub **ingestion** assets as documented; **NYC** batch ingest, **dbt** **staging → core → mart** (`dm_*` marts); **Looker Studio** (≥2 tiles) |
+| **Optional** | Extended TLC dates, extra Looker charts, **streaming** path — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
+
+---
+
+## Troubleshooting and FAQ
+
+| Issue | What to check |
+|-------|----------------|
+| **Missing GCP errors** | Service account path (`GCP_CREDS_PATH` / `credentials/gcp-service-account.json`), roles, `GCP_PROJECT_ID` / `GCS_BUCKET` |
+| **Kestra flow can’t find repo** | **`variables.workspace_host`** = absolute **host** path (Windows: forward slashes) |
+| **Ingest merged wrong months** | Parquet under `data/raw/nyc_taxi/` — clean folder or limit months for a narrow test |
+| **Kestra task “stuck” for tens of minutes** | **`tlc_upload` / `tlc_bigquery`** are heavy — often normal; check `docker ps` for nested Python container |
+| **Looker SUM on pre-aggregated field** | Use **`dm_service_type_totals`** / **`dm_citywide_monthly`** as documented — [Looker](#looker-studio-dashboard-nyc-tlc) |
+| **Flink / streaming** | JARs in **`flink-libs/`**, cancel old jobs before DDL changes — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
+| **Clone works but commands fail** | **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)** — tracked vs local-only files |
+| **Images missing in GitHub preview** | Static assets (e.g. **`docs/nyc-taxi-looker-analytics/*.png`**) may not exist until you export from Looker — see [`docs/nyc-taxi-looker-analytics/README.md`](docs/nyc-taxi-looker-analytics/README.md) |
 
 ---
 
 ## Standalone repository & GitHub
 
-For portfolios and slow external drives (e.g. USB HDD), **publish this folder as its own GitHub repository** and use **`git clone`** instead of copying the whole tree with Explorer. **Git only transfers tracked files**—large Parquet, `venv`, `nyc_taxi_dbt/target/`, and secrets stay out of the remote by design (see `.gitignore`).
+For portfolios, **publish this folder as its own GitHub repository** and use **`git clone`**. **Git only transfers tracked files** — large Parquet, `venv`, `nyc_taxi_dbt/target/`, secrets stay out of the remote (see `.gitignore`).
 
-**First-time publish (from your fast internal disk, after creating an empty repo on GitHub):**
+**First-time publish:**
 
 ```bash
-cd /path/to/this/project   # repository root
+cd /path/to/this/project
 git init
 git add .
-git status    # verify no gcp-creds.json, .env, *.tfstate, or huge data paths are staged
+git status
 git commit -m "Initial commit: NYC taxi data pipeline portfolio"
 git branch -M main
 git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
 git push -u origin main
 ```
 
-**Clone elsewhere (e.g. `E:\IT_SPACES\AI\Projects\my-repo`):**
+**Clone example:**
 
 ```bash
 git clone https://github.com/YOUR_USER/YOUR_REPO.git E:\IT_SPACES\AI\Projects\my-repo
 cd E:\IT_SPACES\AI\Projects\my-repo
 ```
 
-Then restore **local-only** files that are intentionally not in Git. Full checklist: **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)**.
+Then restore local-only files: **[`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md)**.
 
 ---
 
@@ -364,10 +530,10 @@ Then restore **local-only** files that are intentionally not in Git. Full checkl
 
 | Criterion | How this repo addresses it |
 |-------------|------------------------------|
-| **Problem / scope** | [Project objective](#project-objective): two tracks (GitHub Archive + NYC TLC), lake → warehouse → dbt → Looker. |
-| **Cloud + IaC** | GCP (GCS, BigQuery); **Terraform** under `terraform/`. |
-| **Batch / orchestration** | Python ingest + **Kestra** flows (`kestra/flows/`, including **`nyc_taxi_ingest_pipeline`**); local stack: [Docker Compose](#kestra-docker-compose-local-ui); GCS as data lake. |
-| **Data warehouse** | BigQuery tables with **partitioning & clustering** (see [BigQuery optimization](#bigquery-optimization-partitioning-clustering-marts) and ingest script). |
-| **Transformations** | **dbt** `nyc_taxi_dbt`: staging → core → mart. |
-| **Dashboard** | Looker Studio on marts; exports under `docs/nyc-taxi-looker-analytics/`. |
-| **Reproducibility** | This README, env table, and [`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md). |
+| **Problem / scope** | [Project objective](#project-objective): GitHub Archive + NYC TLC, lake → warehouse → dbt → Looker |
+| **Cloud + IaC** | GCP (GCS, BigQuery); **Terraform** under `terraform/` |
+| **Batch / orchestration** | Python ingest + **Kestra** `kestra/flows/batch/`; streaming: `kestra/flows/stream/`; **Flink** + Postgres — [Real-time streaming](#realtime-streaming-green-flink-postgres) |
+| **Data warehouse** | BigQuery **partitioning & clustering** — [BigQuery optimization](#bigquery-optimization-partitioning-clustering-marts) |
+| **Transformations** | **dbt** `nyc_taxi_dbt` |
+| **Dashboard** | **Looker Studio**; exports under `docs/nyc-taxi-looker-analytics/`; **Grafana** on **`trip_stats_realtime`** |
+| **Reproducibility** | [Quick start](#quick-start), [Configuration](#configuration-gcp-and-kestra), [`docs/POST_CLONE_SETUP.md`](docs/POST_CLONE_SETUP.md). Optional: [Going the extra mile](#going-the-extra-mile-optional) |

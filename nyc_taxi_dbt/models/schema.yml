@@ -42,6 +42,9 @@ models:
     columns:
       - name: locationid
         description: "TLC location identifier (join key to pickup/dropoff LocationID in trip facts)."
+        data_tests:
+          - not_null
+          - unique
       - name: borough
         description: "Borough name (e.g. Manhattan, Queens)."
       - name: zone
@@ -54,10 +57,23 @@ models:
     columns:
       - name: tripid
         description: "Surrogate trip id from staging."
+        data_tests:
+          - not_null
+          - unique
       - name: vendorid
         description: "TLC vendor id."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2]
       - name: service_type
         description: "Yellow or Green (Green when union includes Green staging)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Yellow", "Green"]
       - name: pickup_borough
         description: "Pickup location borough from zone dimension."
       - name: pickup_zone
@@ -72,10 +88,19 @@ models:
     columns:
       - name: revenue_zone
         description: "Pickup zone name (revenue attributed to pickup location)."
+        data_tests:
+          - not_null
       - name: revenue_month
         description: "Calendar month of pickup (truncated from pickup_datetime)."
+        data_tests:
+          - not_null
       - name: service_type
         description: "Yellow or Green."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Yellow", "Green"]
       - name: revenue_monthly_total_amount
         description: "Sum of total_amount for the grain."
       - name: total_monthly_trips
@@ -86,21 +111,44 @@ models:
     columns:
       - name: service_type
         description: "Yellow or Green."
+        data_tests:
+          - not_null
+          - unique
+          - accepted_values:
+              arguments:
+                values: ["Yellow", "Green"]
       - name: trip_total
         description: "Sum of trips across all months in dm_citywide_monthly."
+        data_tests:
+          - not_null
 
   - name: dm_citywide_monthly
     description: "Citywide monthly totals by service type (zones rolled up). Prefer this table in Looker for pie/bars to avoid SUM on pre-aggregated zone mart."
     columns:
       - name: revenue_month
         description: "Calendar month (start of month)."
+        data_tests:
+          - not_null
       - name: trip_year
         description: "Year for stacked year comparisons (2019 vs 2020)."
+        data_tests:
+          - not_null
       - name: trip_month
         description: "Month number 1–12 for X-axis sort."
+        data_tests:
+          - not_null
       - name: service_type
         description: "Yellow or Green."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Yellow", "Green"]
       - name: trips
         description: "Total trips in NYC that month for this service type."
+        data_tests:
+          - not_null
       - name: revenue_total
         description: "Sum of total_amount for the grain."
+        data_tests:
+          - not_null

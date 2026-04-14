@@ -35,8 +35,8 @@ variable "gcs_storage_class" {
   default     = "STANDARD"
 }
 
-# 7. Path to service account key for GCP authentication
+# 7. Path to service account key for GCP authentication (run `terraform` from `terraform/`)
 variable "credentials" {
-  description = "GCP Credentials path"
-  default     = "./gcp-creds.json"
+  description = "GCP service account JSON path relative to terraform/ directory"
+  default     = "../credentials/gcp-service-account.json"
 }

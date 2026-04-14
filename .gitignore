@@ -4,7 +4,7 @@ venv/
 .venv/
 __pycache__/
 *.py[cod]
-# History check on repo root: no past commits include paths matching tfstate or gcp-creds
+# History check on repo root: no past commits include paths matching tfstate or credential JSON
 # (`git log --all --name-only | findstr /i "tfstate gcp-creds"` returned nothing).
 
 .env
@@ -23,6 +23,11 @@ terraform/terraform.tfvars
 terraform/*.auto.tfvars
 
 # GCP service account keys & generic credential JSON (never commit)
+# GCP service account key (preferred location — see credentials/README.md)
+credentials/gcp-service-account.json
+# Local UI reminders (Kestra / Grafana) — copy from local-dev-ui.env.example
+credentials/local-dev-ui.env
+# Legacy paths (do not use for new setups)
 terraform/gcp-creds.json
 **/gcp-creds.json
 **/google_credentials.json
@@ -37,6 +42,9 @@ nyc_taxi_dbt/target/
 # Local TLC / Parquet (large; do not commit)
 data/**/*.parquet
 data/**/*.csv
+
+# Flink connector JARs (download into flink-libs/ — see docker-compose Flink services)
+flink-libs/*.jar
 
 # Accidental local Kestra/Docker artifacts at repo root (optional)
 kestra-data/

@@ -4,7 +4,7 @@
 # Prerequisites (same as other flows):
 #   - KV: GCP_BUCKET, GCP_CREDS (JSON string)
 #   - docker-compose: repo mounted at /workspace, Docker socket + Dockerfile.kestra (docker CLI); see README
-#   - terraform/gcp-creds.json present on host (mounted into /workspace/terraform/)
+#   - credentials/gcp-service-account.json present on host (under /workspace/credentials/)
 #   - variables.workspace_host = absolute host path to repo (nested docker bind; edit after clone)
 #
 # Requires Docker inside the Kestra container (docker.sock). Each step runs python:3.12-slim
@@ -57,8 +57,8 @@ tasks:
               -e GCP_PROJECT_ID="{{ vars.project_id }}" \
               -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
               -e BQ_DATASET="{{ vars.bq_dataset }}" \
-              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/credentials/gcp-service-account.json \
+              -e GCP_CREDS_PATH=/workspace/credentials/gcp-service-account.json \
               python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --download-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
       - id: tlc_upload
@@ -74,8 +74,8 @@ tasks:
               -e GCP_PROJECT_ID="{{ vars.project_id }}" \
               -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
               -e BQ_DATASET="{{ vars.bq_dataset }}" \
-              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/credentials/gcp-service-account.json \
+              -e GCP_CREDS_PATH=/workspace/credentials/gcp-service-account.json \
               python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --upload-only --start {{ inputs.start }} --end {{ inputs.end }}"
 
       - id: tlc_bigquery
@@ -91,6 +91,6 @@ tasks:
               -e GCP_PROJECT_ID="{{ vars.project_id }}" \
               -e GCS_BUCKET="{{ kv('GCP_BUCKET') | trim }}" \
               -e BQ_DATASET="{{ vars.bq_dataset }}" \
-              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/terraform/gcp-creds.json \
-              -e GCP_CREDS_PATH=/workspace/terraform/gcp-creds.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS=/workspace/credentials/gcp-service-account.json \
+              -e GCP_CREDS_PATH=/workspace/credentials/gcp-service-account.json \
               python:3.12-slim bash -c "pip install --no-cache-dir -q -r /workspace/requirements-ingest.txt && python scripts/ingest_tlc_2019_2020.py --bq-only --start {{ inputs.start }} --end {{ inputs.end }}"

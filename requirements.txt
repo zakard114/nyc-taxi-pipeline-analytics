@@ -1,0 +1,9 @@
+-r requirements-ingest.txt
+
+# Local Kafka / Redpanda (e.g. scripts/streaming/producer.py)
+kafka-python>=2.0.2
+pandas>=2.0.0
+
+# Code style (lint & format)
+flake8
+black

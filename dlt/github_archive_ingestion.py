@@ -1,11 +1,17 @@
 # dlt: data load tool for ETL pipelines (DuckDB, BigQuery, etc.)
-import dlt
-# requests: HTTP library for fetching data from URLs
-import requests
 # gzip: decompress gzip-compressed response from GitHub Archive
 import gzip
+
 # json: parse each line of JSON from the archive
 import json
+import os
+from pathlib import Path
+
+# requests: HTTP library for fetching data from URLs
+import requests
+
+import dlt
+
 
 # 1. Define the GitHub Archive data source as a dlt source
 @dlt.source
@@ -35,15 +41,22 @@ def github_archive_source(date_str):
     # Return the resource generator to dlt
     return github_events()
 
+
 # 2. Pipeline execution (run when script is executed directly)
 if __name__ == "__main__":
-    # Create pipeline: DuckDB destination for local testing (no cloud cost)
-    pipeline = dlt.pipeline(
-        pipeline_name="github_test",   # Pipeline identifier for dlt state
-        destination="duckdb",          # Local DuckDB file (github_test.duckdb)
-        dataset_name="github_raw"      # Schema/dataset name in DuckDB
-    )
-
-    # Run pipeline: fetch 2026-03-01 15:00 UTC, limit to 100 rows to avoid large disk usage
-    load_info = pipeline.run(github_archive_source("2026-03-01-15").add_limit(100))
-    print(load_info)
+    # Keep DuckDB under data/github/ (see scripts/export_duckdb_to_json.py).
+    root = Path(__file__).resolve().parents[1]
+    gh_dir = root / "data" / "github"
+    gh_dir.mkdir(parents=True, exist_ok=True)
+    prev = os.getcwd()
+    os.chdir(gh_dir)
+    try:
+        pipeline = dlt.pipeline(
+            pipeline_name="github_test",
+            destination="duckdb",
+            dataset_name="github_raw",
+        )
+        load_info = pipeline.run(github_archive_source("2026-03-01-15").add_limit(100))
+        print(load_info)
+    finally:
+        os.chdir(prev)
